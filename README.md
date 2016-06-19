@@ -10,7 +10,7 @@ This code has 2 purposes:
 I am initially developing this for a Xilinx XC9572XL CPLD (72 macrocells) on a Guzunty board.
 I am using Xilinx WebPack 14.7 (no cost license), and a XC9572 CPLD because it is 5V tolerant and readily available (~ $12 for a board on eBay).  However, other tools and CPLDs/FPGAs might work.
 
-I chose Verilog over VHDL because I prefer the more C-like syntax and the pre-processor macros in particular.  This is my first CPLD/FPGA project, so the code probably isn't that great.
+I chose Verilog over VHDL because I prefer the more C-like syntax and the pre-processor macros in particular.  This is my first CPLD/FPGA project and I am just learning Verilog and VHDL, so the code probably isn't that great.
 
 Current status:
 - the main module (WS281X-Splitter) doesn't sim or synth yet
