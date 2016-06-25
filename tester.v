@@ -32,13 +32,16 @@
 //`define TEST_COUNTER4
 //`define TEST_SHIFT24
 //`define TEST_NUMBITS
-`define TEST_BITSTREAM
-//`define TEST_BREAKOUT
+//`define TEST_BITSTREAM
+`define TEST_BREAKOUT
 
 
 `ifdef TEST_BREAKOUT
- `define TEST_BITSTREAM //TODO: figure out how to do #ifdef X OR Y
+ `ifndef TEST_BITSTREAM
+ `define TEST_BITSTREAM //need this to test splitter; TODO: figure out how to do #ifdef X OR Y
+ `endif
 `endif
+
  
 module tester;
 
@@ -165,13 +168,13 @@ module tester;
     reg delayed = 0;
 
 `ifdef TEST_BREAKOUT
-    reg [4-1:0] branches = 0;
+    reg [8-1:0] branches = 0;
     reg [23:0] leds = 0;
     reg valid = 0;
     reg sync = 0;
 
 	// Instantiate the Unit Under Test (UUT)
-	WS281X_Breakout uut(
+	WS281X_Splitter uut(
         .Din(ws281x),
 		.Clock(clk),
 //        .Debug(debug),
@@ -203,16 +206,17 @@ module tester;
             for (ibit = 0; ibit < 24; ibit = ibit + 1)
             begin
 //#0.625
+//1.25 usec per pixel bit:
                 ws281x = 1;
 #0.25
                 ws281x = rgb[24-1 - ibit];
 #0.375
                 ws281x = 0;
 #0.625
-                ws281x = 0; //kludge: need a stmt here
+                delayed = 0; //kludge: need a stmt here
             end
         end
-#300 //latch signal at end; 7 * 30 usec + 50 usec = 260 usec
+#300 //latch signal at end; 7 pixels * 30 usec + 50 usec = 260 usec
         $finish;
     end
 
