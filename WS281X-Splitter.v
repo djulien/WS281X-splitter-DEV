@@ -87,7 +87,7 @@ module WS281X_Splitter (Node, /*Valid, Sync,*/ BranchOut, Din, Clock); //#(param
     wire recover_bit_clk = (timer_count == `TICKS(/*0.6*/ 3 `USEC / 5)) & Clock; //30 when to recover incoming data bit
     wire branch_sel_clk = (timer_count == `TICKS(/*1.0*/ 1 `USEC)) & Clock; //50 when to advance to next branch (Data must be low to avoid fragments)
     wire sync_begin_clk = (timer_count == `TICKS(50 `USEC)) & Clock; //2500 start of sync pulse (WS281X latch signal)
-    wire sync_end_clk = (timer_count == `TICKS(/*50.1*/ 501 `USEC / 10)) & Clock; //2505 end of sync pulse
+    wire sync_end_clk = (timer_count == `TICKS(/*50.1*/ 50 `USEC + 100 `NSEC)) & Clock; //2505 end of sync pulse
 //    assign Sync = (timer_count == 2500) | (timer_count == 2501) | (timer_count == 2502) | (timer_count == 2503) | (timer_count == 2504) | (timer_count == 2505); //(timer_count >= 2500) & (timer_count <= 2505);
 //`define SYNC_PULSE  (25 `NSEC) //desired width of sync (reset) signal
 //`define CLK_PERIOD  (1 / `CLK_FREQ) //@50 MHz = 20 nsec
