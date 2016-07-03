@@ -1,0 +1,45 @@
+#TODO: are timing constraints needed?
+NET "Clock" TNM_NET = Clock;
+TIMESPEC TS_Clock = PERIOD "Clock" 20 ns HIGH 50%;
+
+#clock from CPLD board:
+NET "Clock" BUFG = CLK; #GCK1 displaces FB1.MC11
+
+#WS281X serial in:
+NET "Din" LOC=FB1_2;
+
+#spitter results:
+NET "BranchOut<0>" LOC=FB1_5;
+NET "BranchOut<1>" LOC=FB1_6;
+NET "BranchOut<2>" LOC=FB1_8;
+NET "BranchOut<3>" LOC=FB1_9;
+NET "BranchOut<4>" LOC=FB1_14;
+NET "BranchOut<5>" LOC=FB1_15;
+NET "BranchOut<6>" LOC=FB1_17; #could be Valid
+NET "BranchOut<7>" LOC=FB2_2; #could be Sync
+
+#last node breakout:
+NET "Node<0>" LOC=FB2_5;
+NET "Node<1>" LOC=FB2_6;
+NET "Node<2>" LOC=FB2_8;
+NET "Node<3>" LOC=FB2_9;
+NET "Node<4>" LOC=FB2_11;
+NET "Node<5>" LOC=FB2_14;
+NET "Node<6>" LOC=FB2_15;
+NET "Node<7>" LOC=FB2_17;
+NET "Node<8>" LOC=FB3_2;
+NET "Node<9>" LOC=FB3_5;
+NET "Node<10>" LOC=FB3_8;
+NET "Node<11>" LOC=FB3_9;
+NET "Node<12>" LOC=FB3_11;
+NET "Node<13>" LOC=FB3_14;
+NET "Node<14>" LOC=FB3_15;
+NET "Node<15>" LOC=FB3_16;
+NET "Node<16>" LOC=FB3_17;
+NET "Node<17>" LOC=FB4_2;
+NET "Node<18>" LOC=FB4_5;
+NET "Node<19>" LOC=FB4_8;
+NET "Node<20>" LOC=FB4_11;
+NET "Node<21>" LOC=FB4_14;
+NET "Node<22>" LOC=FB4_15;
+NET "Node<23>" LOC=FB4_17;
