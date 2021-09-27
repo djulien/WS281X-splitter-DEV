@@ -9,9 +9,9 @@
    xmlns="http://www.w3.org/2000/svg"
    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
-   width="286.58868mm"
-   height="61.384754mm"
-   viewBox="0 0 286.58868 61.384755"
+   width="500mm"
+   height="70mm"
+   viewBox="0 0 499.99999 70.000001"
    version="1.1"
    id="svg4528"
    inkscape:version="0.92.5 (2060ec1f9f, 2020-04-08)"
@@ -192,7 +192,7 @@
      inkscape:pageopacity="0.0"
      inkscape:pageshadow="2"
      inkscape:zoom="0.49497475"
-     inkscape:cx="358.73323"
+     inkscape:cx="629.16191"
      inkscape:cy="61.119026"
      inkscape:document-units="mm"
      inkscape:current-layer="layer1"
@@ -245,86 +245,86 @@
      inkscape:label="Layer 1"
      inkscape:groupmode="layer"
      id="layer1"
-     transform="translate(-18.693183,-159.92751)">
+     transform="translate(-18.693183,-151.31226)">
     <path
        style="fill:none;stroke:#00c000;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow2Lend-3)"
-       d="m 136.28313,191.16665 c 24.05437,0 24.05437,0 24.05437,0"
+       d="m 138.92898,186.93329 c 24.05437,0 24.05437,0 24.05437,0"
        id="path5103-7"
        inkscape:connector-curvature="0" />
     <path
        style="fill:none;stroke:#ff8040;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow2Lend-1)"
-       d="m 164.32906,164.70833 c 24.05426,0 24.05426,0 24.05426,0"
+       d="m 166.97491,160.47497 c 24.05426,0 24.05426,0 24.05426,0"
        id="path5103-0"
        inkscape:connector-curvature="0" />
     <text
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;font-size:10.58333302px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.26458332"
-       x="18.341784"
-       y="194.6059"
+       x="20.987619"
+       y="190.37262"
        id="text4552-3"><tspan
          sodipodi:role="line"
-         x="18.341784"
-         y="194.6059"
+         x="20.987619"
+         y="190.37262"
          style="stroke-width:0.26458332"
          id="tspan940">WS281X or controller</tspan></text>
     <path
        style="fill:none;stroke:#ff8040;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow2Lend-1-4)"
-       d="m 164.32906,182.17084 c 24.05426,0 24.05426,0 24.05426,0"
+       d="m 166.97491,177.93748 c 24.05426,0 24.05426,0 24.05426,0"
        id="path5103-0-4"
        inkscape:connector-curvature="0" />
     <path
        style="fill:none;stroke:#ff8040;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow2Lend-1-47)"
-       d="m 164.32906,200.1625 c 24.05426,0 24.05426,0 24.05426,0"
+       d="m 166.97491,195.92914 c 24.05426,0 24.05426,0 24.05426,0"
        id="path5103-0-3"
        inkscape:connector-curvature="0" />
     <path
        style="fill:none;stroke:#ff8040;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow2Lend-1-1)"
-       d="m 164.32906,216.56667 c 24.05426,0 24.05426,0 24.05426,0"
+       d="m 166.97491,212.33331 c 24.05426,0 24.05426,0 24.05426,0"
        id="path5103-0-5"
        inkscape:connector-curvature="0" />
     <text
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;font-size:10.58333302px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.26458332"
-       x="195.09737"
-       y="168.19971"
+       x="197.74316"
+       y="163.96643"
        id="text4552-9-8"><tspan
          sodipodi:role="line"
          id="tspan4550-6-5"
-         x="195.09737"
-         y="168.19971"
+         x="197.74316"
+         y="163.96643"
          style="stroke-width:0.26458332">WS281X  STRING1 ...</tspan></text>
     <text
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;font-size:10.58333302px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.26458332"
-       x="195.09737"
-       y="185.66219"
+       x="197.74316"
+       y="181.42891"
        id="text4552-9-8-4"><tspan
          sodipodi:role="line"
          id="tspan4550-6-5-1"
-         x="195.09737"
-         y="185.66219"
+         x="197.74316"
+         y="181.42891"
          style="stroke-width:0.26458332">WS281X  STRING2 ...</tspan></text>
     <text
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;font-size:10.58333302px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.26458332"
-       x="195.09737"
-       y="203.12466"
+       x="197.74316"
+       y="198.89139"
        id="text4552-9-8-5"><tspan
          sodipodi:role="line"
          id="tspan4550-6-5-9"
-         x="195.09737"
-         y="203.12466"
+         x="197.74316"
+         y="198.89139"
          style="stroke-width:0.26458332">WS281X  STRING3 ...</tspan></text>
     <text
        xml:space="preserve"
        style="font-style:normal;font-weight:normal;font-size:10.58333302px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.26458332"
-       x="195.09737"
-       y="220.58714"
+       x="197.74316"
+       y="216.35387"
        id="text4552-9-8-53"><tspan
          sodipodi:role="line"
          id="tspan4550-6-5-8"
-         x="195.09737"
-         y="220.58714"
+         x="197.74316"
+         y="216.35387"
          style="stroke-width:0.26458332">WS281X  STRING4 ...</tspan></text>
     <flowRoot
        xml:space="preserve"
@@ -339,7 +339,7 @@
            y="-97.298927" /></flowRegion><flowPara
          id="flowPara1702" /></flowRoot>    <path
        style="fill:none;stroke:#ff4000;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       d="m 164.04166,164.70831 v 52.91667"
+       d="m 166.68751,160.47495 v 52.91667"
        id="path1639"
        inkscape:connector-curvature="0" />
   </g>
