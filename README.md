@@ -1,13 +1,14 @@
 # WS281X-Splitter Overview
 WS281X-Splitter has 2 main purposes:
-1. Split one long string of WS281X pixels into multiple (up to 4) shorter strings.  This can be used as an alternative to daisy-chaining multiple WS281X strips/strings and/or to avoid the need for null pixels between strings.
-2. Show the last WS281X pixel value (24 bits) as a breakout (for debug).  Also shows FPS (8 bits) for controller debugging.
+1. ![Splitter diagram](splitter.svg)
+Split one long string of WS281X pixels into multiple (up to 4) shorter strings.  This can be used as an alternative to daisy-chaining multiple WS281X strips/strings and/or to avoid the need for null pixels between strings.
+2. ![Breakout diagram](breakout.svg)
+Show the last WS281X pixel value (24 bits) as a breakout (for debug).  Also shows FPS (8 bits) for controller debugging.
 This firmware is written specifically for the Microchip PIC16F15313, but can be adapted to some other PICs.  The firmware runs at 8 MIPS and uses Timers 0-2, MSSP, PWM, and CLC peripherals.  The CLC is required in order to receive or send WS281X data signals on an 8 MIPS PIC.
 # Usage
-![Connection diagram](connections.svg)
 ## As Splitter
 Connect WS281X-splitter as follows to use the splitter function:
-(diagram)
+![Connection diagram](connections.svg)
 In the sequencing software, the splitter will be represented by 1 WS281X pixel followed by another string of WS281X pixels which will be split into 1-4 segments.
 1. Download WS281X-splitter.hex and flash to a PIC16F15313**
 2. In your sequencing software, insert 1 extra pixel immediately ahead of the pixels to be split.  Set its 24-bit value to the quad-length** of the (first, second, third) segments to be split.  Any additional pixel values will be sent to the fourth segment.
@@ -15,7 +16,7 @@ In the sequencing software, the splitter will be represented by 1 WS281X pixel f
 
 ## As Breakout
 Connect WS281X-splitter as follows to use the break-out function:
-(diagram)
+![Connection diagram](connections.svg)
 The first 24 pixels connected to the Breakout channel will show the first pixel value received.  The next 8 pixels will display the FPS.
 
 1. Download WS281X-splitter.hex and flash to a PIC16F15313**
