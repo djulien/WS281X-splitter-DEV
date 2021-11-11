@@ -53,10 +53,10 @@
         </subordinates>
       </compileType>
       <makeCustomizationType>
-        <makeCustomizationPreStepEnabled>false</makeCustomizationPreStepEnabled>
-        <makeCustomizationPreStep></makeCustomizationPreStep>
+        <makeCustomizationPreStepEnabled>true</makeCustomizationPreStepEnabled>
+        <makeCustomizationPreStep>cat wssplitter.asm  |  awk '{gsub(/__LINE__/, NR)}1' |  tee  "__FILE__ 1.ASM"  "__FILE__ 2.ASM"  "__FILE__ 3.ASM"  "__FILE__ 4.ASM"  "__FILE__ 5.ASM"  "__FILE__ 6.ASM"  "__FILE__ 7.ASM"  >  __FILE__.ASM</makeCustomizationPreStep>
         <makeCustomizationPostStepEnabled>true</makeCustomizationPostStepEnabled>
-        <makeCustomizationPostStep>cp ${ImagePath} /home/dj/Documents/ESOL-fog/ESOL21/tools/PIC/firmware</makeCustomizationPostStep>
+        <makeCustomizationPostStep>rm -f nope__FILE__* &amp;&amp; cp ${ImagePath} /home/dj/Documents/ESOL-fog/ESOL21/tools/PIC/firmware &amp;&amp;  awk 'BEGIN{IGNORECASE=1} NR==FNR { if ($$2 == "EQU") EQU[$$1] = $$3; next; } !/^ +((M|[0-9]+) +)?(EXPAND|EXITM|LIST)([ ;_]|$$)/  { if ((NF != 2) || !match($$2, /^[0-9A-Fa-f]+$$/) || (!EQU[$$1] &amp;&amp; !match($$1, /_[0-9]+$$/))) print; }'  /opt/microchip/mplabx/v5.35/mpasmx/p16f15313.inc  ./build/${ConfName}/${IMAGE_TYPE}/wssplitter.o.lst  >  wssplitter.LST</makeCustomizationPostStep>
         <makeCustomizationPutChecksumInUserID>false</makeCustomizationPutChecksumInUserID>
         <makeCustomizationEnableLongLines>false</makeCustomizationEnableLongLines>
         <makeCustomizationNormalizeHexFile>false</makeCustomizationNormalizeHexFile>
@@ -68,6 +68,7 @@
         <property key="hex.output.format" value="INHX32"/>
         <property key="preprocessor.macros" value=""/>
         <property key="warning.level" value="0"/>
+        <appendMe value="-w0"/>
       </MPASMWIN-AS>
       <MPASMWIN-LD>
         <property key="cod-file" value="false"/>
@@ -114,7 +115,7 @@
         <property key="uart10io.uartioenabled" value="false"/>
         <property key="uart1io.output" value="window"/>
         <property key="uart1io.outputfile" value=""/>
-        <property key="uart1io.uartioenabled" value="false"/>
+        <property key="uart1io.uartioenabled" value="true"/>
         <property key="uart2io.output" value="window"/>
         <property key="uart2io.outputfile" value=""/>
         <property key="uart2io.uartioenabled" value="false"/>

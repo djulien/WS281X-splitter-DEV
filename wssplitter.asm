@@ -1,257 +1,1584 @@
-    title  "WS281X-Splitter - WS281X channel splitter/debug/breakout using Microchip PIC16F15313"
-;WS281X splitter/debugger 0.21
-;(c)2021 djulien@thejuliens.net
-; ================================================================================
+    title  "WS281X-Splitter - WS281X segment splitter/breakout/debug for Microchip PIC"
+;================================================================================
 ; File:     wssplitter.asm
-; Device:   PIC16F15313 (Microchip PIC, 8 MIPS, CLC, 8-pin) or equivalent
-; Author:   djulien@thejuliens.net
 ; Date:     8/11/2021
-; Compiler: mpasmx(v5.35)
+; Version:  0.21.10
+; Author:   djulien@thejuliens.net, (c)2021 djulien@thejuliens.net
+; Device:   PIC16F15313 (midrange Microchip 8-pin PIC) or equivalent running @8 MIPS
+; Peripherals used: Timer0, Timer1 (gated), Timer2, no-MSSP, EUSART, no-PWM, CLC
+; Compiler: mpasmx(v5.35), NOT pic-as; NOTE: custom build line is used for source code fixups
 ; IDE:      MPLABX v5.35 (last one to include mpasm)
 ; Description:
-;   WS281X splitter/debugger can be used for the following purposes:
-;   1. split s single WS281X data stream into up to 4 separate streams; 
-;     creates a virtual daisy chain of LED strings instead of using null pixels
-;   2. debugger or signal integrity checker; show 24-bit node data at end of string
-;   3. timing checker; display frame rate (FPS received); color is used as heartbeat
+;   WS281X-Splitter can be used for the following purposes:
+;   1. split a single WS281X data stream into <= 4 separate segments; 
+;     creates a virtual daisy chain of LED strings instead of using null pixels between
+;   2. debugger or signal integrity checker; show 24-bit WS pixel data at end of string
+;   3. timing checker; display frame rate (FPS received); alternating color is used as heartbeat
 ; Build instructions:
 ;no   ?Add this line in the project properties box, pic-as Global Options -> Additional options:
 ;no   -Wa,-a -Wl,-pPor_Vec=0h,-pIsr_Vec=4h
-;   - use PicKit or equivalent programmer
+;   - use PICKit2 or 3 or equivalent programmer (PICKit2 requires PICKitPlus for newer PICs)
 ; Wiring:
 ;  RA0 = debug output (32 px WS281X):
-;        - first 24 px shows channel 1/2/3 quad px length (0 = 1K)
+;        - first 24 px shows segment 1/2/3 quad px length (0 = 1K)
 ;        - next 8 px = FPS (255 max), msb first
-;  RA1 = output channel 1
-;  RA2 = output channel 2
+;  RA1 = output segment 1
+;  RA2 = output segment 2
 ;  RA3 = WS281X input stream
-;        - first/second/third byte = channel 1/2/3 quad node length
-;	 - first channel data follows immediately
-;  RA4 = output channel 4; receives anything after channel 1/2/3
-;  RA5 = output channel 3
+;        - first/second/third byte = segment 1/2/3 quad pixel length
+;	 - first segment data follows immediately
+;  RA4 = output segment 4; receives anything after segment 1/2/3
+;  RA5 = output segment 3
 ; TODO:
-;  - use PPS to set RA3 as channel 3 out and RA5 as WS input?
-;  - uart bootloader; ground channel 0 out to enable? auto-baud detect; verify
-;  - custom node dup/skip, enforce max brightness limit?
-; ================================================================================
-    NOLIST
+;  - use PPS to set RA3 as segment 3 out and RA5 as WS input?
+;  - uart bootloader; ground segment 0 out to enable? auto-baud detect; verify
+;  - custom pixel dup/skip, enforce max brightness limit?
+;================================================================================
+    NOLIST; reduce clutter in .LST file
+;NOTE: ./Makefile += AWK, GREP
+;test controller: SP108E_3E6F0D
+;check nested #if/#else/#endif: grep -vn ";#" this-file | grep -e "#if" -e "#else" -e "#endif"
+;or:    sed 's/;.*//' < ~/MP*/ws*/wssplitter.asm | grep -n -e " if " -e " else" -e " end" -e " macro" -e " while "
+;grep -viE '^ +((M|[0-9]+) +)?(EXPAND|EXITM|LIST)([ ;_]|$$)'  ./build/${ConfName}/${IMAGE_TYPE}/wssplitter.o.lst > wssplitter.LST
+    EXPAND; show macro expansions
+#ifndef HOIST
+#define HOIST  0
+#include __FILE__; self
+    messg no hoist, app config/defs @__LINE__
+    LIST_PUSH TRUE
+    EXPAND_PUSH FALSE
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;#ifndef WANT_HOIST
-;    messg "hello 1"
-    LIST n = 60, c = 200, t = on, n = 0  ;line (page) size, column size, truncate, no paging
-;	LIST r=hex  ;radix; NOTE: this affects interpretation of literals, as well as output listing; ALWAYS use D'' with literals > 8
-    LIST R = DEC
-    LIST mm = on  ;memory map
-    LIST st = on  ;symbol table
-;    PAGEWIDTH   132
-;    RADIX       DEC
-
-#ifdef __16F15313
-    LIST p = 16F15313
-    PROCESSOR 16F15313  ;688 ;16F877A
-;#include "P16F15313.INC"
- #include <p16f15313.inc>
-    NOLIST; .inc file turned it on again
-#else
-    error [ERROR] Which device?
-#endif
-;pic-as not mpasm: #include <xc.inc>
-
-;config options:
+;compile-time options:
 ;#define BITBANG; dev/test only
-;#define WANT_DEBUG; dev/test only
+;;#define SPI_TEST
+#define WANT_DEBUG; DEV/TEST ONLY!
+;#define WANT_ISR; ISR not used; uncomment to reserve for (jump from) ISR
 #define WSBIT_FREQ  (800 KHz); WS281X "high" speed
+#define WSLATCH  (50 -20 usec); end-of-frame latch time; "cheat" by using shorter interval and use the extra time for processing overhead
+;#define MAX_THREADS  2; ani xmit or frame rcv, breakout xmit
+#define FOSC_FREQ  (32 MHz); max speed; TODO: check if lower speed will work
 
+;pin assignments:
+#define WSDI  RA3; RA3 = WS input stream (from controller or previous WS281X pixels)
+#define BREAKOUT  RA0; RA0 = WS breakout pixels, or simple LED for dev/debug
+#define LEDOUT  IIFDEBUG(SEG4OUT, -1); RA5 = simple LED output; ONLY FOR DEV/DEBUG
+;#define WSCLK  4-2; RA4 = WS input clock (recovered from WS input data signal); EUSART sync rcv clock needs a real I/O pin?
+#define SEG1OUT  RA1; RA1 = WS output segment 1
+#define SEG2OUT  RA2; RA2 = WS output segment 2
+#define SEG3OUT  RA#v(3+2); RA5 = WS output segment 3; RA3 is input-only, use alternate pin for segment 3
+#define SEG4OUT  RA4; RA4 = WS output segment 4
+#define RGSWAP  0x321; 3 = R, 2 = G, 1 = B; default = 0x123 = BGR
+;123 = rbg
+;132 = brg
+;213 = gbr
+;231 = grb
+;312 = bgr
+;321 = rgb
 
-;clock macros:
-#define mhz(freq)  rdiv(freq, 1000000)
-#define khz(freq)  rdiv(freq, 1000)
-#define scale(freq, prescaler)  ((freq) / BIT(prescaler))
-;readabililty macros:
-;CAUTION: usage might require parens
-#define MHz  * 1000000
-#define KHz  * 1000
-;#define Hz  * 1
-#define PLL  * 2; PLL on int osc is 2, ext clk is 4
-#define MIPS  * 4 MHz ;4 clock cycles per instr
+;peripherals:
+;NOTE: PPS is locked and each WS output segment has its own CLC to copy RA3, rather than changing PPS all the time
+;#define WSSYNC  3; PWM# generate WS data sync pulse
+;#define WSPASS  1; CLC# pass-thru WS input -> output
+;#define WSDO  2; CLC# generate composite WS data signal
+;#define ONESHOT  3; CLC# to generate one-shot 0.5 usec pulse triggered by WS data signal
 
-
-;HFFRQ values:
-;(these should be in p16f15313.inc)
-    CONSTANT HFFRQ#v(32 MHz) = b'110'
-    CONSTANT HFFRQ#v(16 MHz) = b'101'
-    CONSTANT HFFRQ#v(12 MHz) = b'100'
-    CONSTANT HFFRQ#v(8 MHz) = b'011'
-    CONSTANT HFFRQ#v(4 MHz) = b'010'
-    CONSTANT HFFRQ#v(2 MHz) = b'001'
-    CONSTANT HFFRQ#v(1 MHz) = b'000'
-
-
-;memory banks:
-;#define COMMON_START  0
-#define COMMON_END  0xC
-#define GPR_START  0x20
-#define GPR_END  0x70
-;    CONSTANT GPR_LEN = GPR_END - GPR_START;
-#define BANKLEN  0x80
-;    CONSTANT NONBANKED_LEN = BANKLEN - GPR_END;
-;line too long    CONSTANT BANKLEN = 0X80;
-#define BANK_UNKN  -1 ;non-banked or unknown
-;line too long    CONSTANT BANK_UNKN = -1; non-banked or unknown
-#define BANKOFS(reg)  ((reg) % BANKLEN)
-#define ISBANKED(reg)  ((BANKOFS(reg) >= COMMON_END) && (BANKOFS(reg) < GPR_END))
-;    MESSG "TODO: check !banked reg also"
-#define BANKOF(reg)  IIF(ISBANKED(reg), REG2ADDR(reg) / BANKLEN, BANK_UNKN)
-
-
-;code pages:
-;special code addresses:
-#define RESET_VECTOR  0
-#define ISR_VECTOR  4
-;get page# of a code address:
-;#define PAGELEN  0x400
-#define REG_PAGELEN  0x100  ;code at this address or above is paged and needs page select bits (8 bit address)
-#define LIT_PAGELEN  0x800  ;code at this address or above is paged and needs page select bits (11 bit address)
-;line too long    CONSTANT PAGELEN = 0X400;
-;#define BANKOFS(reg)  ((reg) % BANKLEN)
-#define LITPAGEOF(addr)  ((addr) / LIT_PAGELEN)  ;used for direct addressing (thru opcode)
-#define REGPAGEOF(addr)  ((addr) / REG_PAGELEN)  ;used for indirect addressing (thru register)
-
-
-;bool macros:
-#define TRUE  1
-#define FALSE  0
-#define BOOL2INT(val)  ((val) != 0)
-;ternary operator (like C/C++ "?:" operator):
-;line too long: #define IIF(TF, tval, fval)  (BOOL2INT(TF) * (tval) + (!BOOL2INT(TF)) * (fval))
-#define IIF(TF, tval, fval)  (BOOL2INT(TF) * ((tval) - (fval)) + (fval)) ;favors short fval
-
-#ifdef WANT_DEBUG
- #define IIFDEBUG(tval, ignored)  tval
+    EXPAND_POP
+    LIST_POP
+    messg end of !hoist @__LINE__
+#undefine HOIST; preserve state for plumbing @eof
 #else
- #define IIFDEBUG(ignored, fval)  fval
+#if HOIST == 4
+    messg NO-hoist 4: fps tracking thread @__LINE__
+    LIST_PUSH TRUE
+    EXPAND_PUSH FALSE
+;; fps tracking thread ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+#if 0; OBSOLETE; combined into rcv_frame thread for efficiency
+    THREAD_DEF fps_tracking, 2
+
+    nbDCL FPS_count,;
+    nbDCL FPS_render,; save latest count so rendering can be done while counting frames
+
+fps_tracking: DROP_CONTEXT;
+;    fps_init 1 sec; do this in rcv_frame thread after running brkout_ani
+;    mov8 count_FPS, LITERAL(0); FPS will be junk until rcv_frame is finished startup
+fps_loop:
+    mov8 FPS_render, FPS_count; rendered by brkout thread
+    mov8 FPS_count, LITERAL(0); updated by rcv frame
+    wait4frame YIELD, YIELD_AGAIN; 1 sec
+;    wait4render YIELD, YIELD_AGAIN; don't change breakout px while being rendered
+;use cyan for even frames (heartbeat):
+;    set_brkout_px 24+0, FPS, 7, WHITE_RGBINX, CYAN_RGBINX;
+;    set_brkout_px 24+1, FPS, 6, WHITE_RGBINX, CYAN_RGBINX;
+;    set_brkout_px 24+2, FPS, 5, WHITE_RGBINX, CYAN_RGBINX;
+;    set_brkout_px 24+3, FPS, 4, WHITE_RGBINX, CYAN_RGBINX;
+;    set_brkout_px 24+4, FPS, 3, WHITE_RGBINX, CYAN_RGBINX;
+;    set_brkout_px 24+5, FPS, 2, WHITE_RGBINX, CYAN_RGBINX;
+;    set_brkout_px 24+6, FPS, 1, WHITE_RGBINX, CYAN_RGBINX;
+;    set_brkout_px 24+7, FPS, 0, WHITE_RGBINX, CYAN_RGBINX;
+;    mov8 FPS, LITERAL(0);
+;    wait4frame YIELD, YIELD_AGAIN; 1 sec
+;    wait4render YIELD, YIELD_AGAIN; don't change breakout px while being rendered
+;use magenta for odd frames (heartbeat):
+;    set_brkout_px 24+0, FPS, 7, WHITE_RGBINX, MAGENTA_RGBINX;
+;    set_brkout_px 24+1, FPS, 6, WHITE_RGBINX, MAGENTA_RGBINX;
+;    set_brkout_px 24+2, FPS, 5, WHITE_RGBINX, MAGENTA_RGBINX;
+;    set_brkout_px 24+3, FPS, 4, WHITE_RGBINX, MAGENTA_RGBINX;
+;    set_brkout_px 24+4, FPS, 3, WHITE_RGBINX, MAGENTA_RGBINX;
+;    set_brkout_px 24+5, FPS, 2, WHITE_RGBINX, MAGENTA_RGBINX;
+;    set_brkout_px 24+6, FPS, 1, WHITE_RGBINX, MAGENTA_RGBINX;
+;    set_brkout_px 24+7, FPS, 0, WHITE_RGBINX, MAGENTA_RGBINX;
+    goto fps_loop;
+    
+;wait4render macro idler, idler2
+;    whilebit FSR0L, breakout_eof(FALSE), idler
+;    whilebit FSR0L, breakout_eof(FALSE), idler2
+;    endm
+;set_brkout_px macro pxofs, val, bitnum, oncolor, offcolor
+;    movlw offcolor
+;    ifbit val, bitnum, TRUE, movlw oncolor
+;    mov8 brkoutpx+pxofs, WREG;
+;    endm
+    
+;;    CONSTANT BRKOUT#v(3)_RGBINX  CYAN_RGBINX; FPS
+;    CONSTANT BRKOUT#v(4)_RGBINX  MAGENTA_RGBINX; alternate FPS (heartbeat)
+
+    THREAD_END;
+#endif; 0
+
+    EXPAND_POP
+    LIST_POP
+    messg end of hoist 4 @__LINE__
+;#else; too deep :(
+#endif
+#if HOIST == 4444
+    messg hoist 4: line conditioner (main logic) @__LINE__
+    LIST_PUSH TRUE
+    EXPAND_PUSH FALSE
+;; line conditioner (main logic) ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+    THREAD_DEF line_conditioner, 2
+
+line_conditioner: DROP_CONTEXT;
+    ws_decode WREG, WANT_BIT | SETUP_FULL | SETUP_ONLY,; setup but don't decode
+    ws_breakout_setup; eusart init @SPI 3x (2.4 Mbps)
+loop: DROP_CONTEXT;
+    wait2xmit YIELD, YIELD_AGAIN; wait before loading WREG to avoid save/restore
+    mov8 TX1REG, WREG; start xmit
+    
+    
+    THREAD_END;
+
+    EXPAND_POP
+    LIST_POP
+    messg end of hoist 4 @__LINE__
+;#else; too deep :(
+#endif
+#if HOIST == 6
+    messg hoist 6: rcv frame thread (main logic) @__LINE__
+    LIST_PUSH TRUE
+    EXPAND_PUSH FALSE
+;; frame rcv thread (main logic) ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;    UGLY_PASS12FIX -1
+;    messg #thr #v(NUM_THREADS), YIELD @__LINE__
+    THREAD_DEF rcv_frame, 4
+;    messg #thr #v(NUM_THREADS), YIELD @__LINE__
+
+;    init_more TRUE;
+;    call brkout_ani; call this during init
+;    init_more FALSE;
+
+;blink_1sec: DROP_CONTEXT;
+rcv_frame: DROP_CONTEXT;
+    CALL brkout_ani
+    fps_init 1 sec
+rcv_loop: DROP_CONTEXT;
+    ifbit elapsed_fps, TRUE, CALL fps_update; render FPS 1x/sec during idle time at end of frame
+    INCF FPS, F; assume !overflow; max FPS likely ~ 40 - 50
+    messg TODO: wait for 50 usec, start rcv/xfr, trigger brkout render @__LINE__
+    setbit LATA, LEDOUT, TRUE;
+;    movlw 22;
+;    BANKSAFE dest_arg(F) addwf FPS_render;
+    wait4frame YIELD, YIELD_AGAIN; 1 sec
+    setbit LATA, LEDOUT, FALSE;
+;    movlw 10;
+;    BANKSAFE dest_arg(F) addwf FPS_render;
+    wait4frame YIELD, YIELD_AGAIN; 1 sec
+    GOTO rcv_loop;
+
+
+    nbDCL FPS,;
+    CONSTANT FPS_RGBINX = CYAN_RGBINX; FPS
+    CONSTANT FPS_RGBINX_ALT = MAGENTA_RGBINX; alternate FPS (heartbeat)
+    ERRIF(!((FPS_RGBINX ^ FPS_RGBINX_ALT) & RED_RGBINX), [ERROR] red bit #v(RED_RGBINX) can''t be used to check frame parity: #v(FPS_RGBINX ^ FPS_RGBINX_ALT) @__LINE__);
+
+set_fps_pxbit macro bitnum
+    BANKCHK brkoutpx;
+    messg TODO ^^^ fix banksel in ifbit @__LINE__
+    ifbit FPS, 7 - bitnum, TRUE, MOVWF brkoutpx + 24 + bitnum;
+    endm
+
+;render FPS breakout px then reset:
+fps_update: DROP_CONTEXT;
+    EXPAND_PUSH FALSE
+    MOVLW WHITE_RGBINX;
+    REPEAT LITERAL(8), MOVWF brkoutpx + 24 + REPEATER; set "on" color
+    MOVLW FPS_RGBINX;
+    ifbit FPS, 7, TRUE, MOVLW FPS_RGBINX_ALT; kludge: use top bit for heartbeat color
+    REPEAT LITERAL(8), set_fps_pxbit REPEATER; set "off" color
+    CLRF FPS; restart frame count for next 1 sec
+    ifbit WREG, log2(RED_RGBINX), FPS_RGBINX & RED_RGBINX, biton_#v(7) FPS; toggle parity
+;    setbit elapsed_fps, FALSE;
+    EXPAND_POP
+    return;
+;even_frame:
+;use cyan for even frames (heartbeat):
+;    set_brkout_px 24+0, FPS, 7, WHITE_RGBINX, CYAN_RGBINX;
+;    set_brkout_px 24+1, FPS, 6, WHITE_RGBINX, CYAN_RGBINX;
+;    set_brkout_px 24+2, FPS, 5, WHITE_RGBINX, CYAN_RGBINX;
+;    set_brkout_px 24+3, FPS, 4, WHITE_RGBINX, CYAN_RGBINX;
+;    set_brkout_px 24+4, FPS, 3, WHITE_RGBINX, CYAN_RGBINX;
+;    set_brkout_px 24+5, FPS, 2, WHITE_RGBINX, CYAN_RGBINX;
+;    set_brkout_px 24+6, FPS, 1, WHITE_RGBINX, CYAN_RGBINX;
+;    set_brkout_px 24+7, FPS, 0, WHITE_RGBINX, CYAN_RGBINX;
+;    mov8 FPS, LITERAL(0);
+;    wait4frame YIELD, YIELD_AGAIN; 1 sec
+;    wait4render YIELD, YIELD_AGAIN; don't change breakout px while being rendered
+;use magenta for odd frames (heartbeat):
+;    set_brkout_px 24+0, FPS, 7, WHITE_RGBINX, MAGENTA_RGBINX;
+;    set_brkout_px 24+1, FPS, 6, WHITE_RGBINX, MAGENTA_RGBINX;
+;    set_brkout_px 24+2, FPS, 5, WHITE_RGBINX, MAGENTA_RGBINX;
+;    set_brkout_px 24+3, FPS, 4, WHITE_RGBINX, MAGENTA_RGBINX;
+;    set_brkout_px 24+4, FPS, 3, WHITE_RGBINX, MAGENTA_RGBINX;
+;    set_brkout_px 24+5, FPS, 2, WHITE_RGBINX, MAGENTA_RGBINX;
+;    set_brkout_px 24+6, FPS, 1, WHITE_RGBINX, MAGENTA_RGBINX;
+;    set_brkout_px 24+7, FPS, 0, WHITE_RGBINX, MAGENTA_RGBINX;
+
+
+;show a little animation on power-up:
+;NOTE: this interferes with FPS tracking; use only at startup
+;use FSR1 to set animation, FSR0 to send it
+brkout_ani: DROP_CONTEXT;
+;    call blink2;
+;    call breakout_reset;
+;    call wait_1sec;
+;    call blink2;
+;    fps_init 250 msec;
+    fps_init 100 msec; CAUTION: reusing FPS timer
+    mov16 FSR1, LITERAL(brkoutpx);
+    MOVLW OFF_RGBINX;
+off_loop: ;DROP_CONTEXT;
+    mov8 INDF1_postinc, WREG; LITERAL(OFF_RGBINX);
+;    ifbit FSR0L, log2(END_DETECT), !(ENDOF(brkoutpx) & END_DETECT), goto off_loop;
+    ifbit FSR1L, breakout_eof(FALSE), GOTO off_loop;
+    CALL ani_delay;
+#if 0
+    messg REMOVE THIS
+    mov8 brkoutpx+0, LITERAL(RED_RGBINX);
+    CALL ani_delay;
+    mov8 brkoutpx+8, LITERAL(GREEN_RGBINX);
+    CALL ani_delay;
+    mov8 brkoutpx+16, LITERAL(BLUE_RGBINX);
+    CALL ani_delay;
+    mov8 brkoutpx+24, LITERAL(YELLOW_RGBINX);
+    CALL ani_delay;
+    mov8 brkoutpx+0, LITERAL(OFF_RGBINX);
+    mov8 brkoutpx+8, LITERAL(OFF_RGBINX);
+    mov8 brkoutpx+16, LITERAL(OFF_RGBINX);
+    mov8 brkoutpx+24, LITERAL(OFF_RGBINX);
+    return;
+#endif
+    mov16 FSR1, LITERAL(brkoutpx);
+red_ani: ;DROP_CONTEXT;
+    mov8 INDF1_postinc, LITERAL(RED_RGBINX);
+    CALL ani_delay;
+    ifbit FSR1L, log2(8), !((brkoutpx + 8) & 8), GOTO red_ani; still doing first byte
+green_ani: ;DROP_CONTEXT;
+    mov8 INDF1_postinc, LITERAL(GREEN_RGBINX);
+    CALL ani_delay;
+    ifbit FSR1L, log2(16), !((brkoutpx + 16) & 16), GOTO green_ani; still doing second byte
+blue_ani: ;DROP_CONTEXT;
+    mov8 INDF1_postinc, LITERAL(BLUE_RGBINX);
+    CALL ani_delay;
+    ifbit FSR1L, log2(8), !((brkoutpx + 24) & 8), GOTO blue_ani; still doing third byte
+fps_ani: ;DROP_CONTEXT;
+    mov8 INDF1_postinc, LITERAL(FPS_RGBINX);
+    CALL ani_delay;
+    ifbit FSR1L, log2(64), !((brkoutpx + 32) & 64), GOTO fps_ani; still doing fourth byte
+    fps_init 500 msec;
+alt_loop:
+    MOVLW WHITE_RGBINX;
+    REPEAT LITERAL(32/2), MOVWF brkoutpx + REPEATER * 2; set "on" color every other px
+    CALL ani_delay;
+    REPEAT LITERAL(32/2), swap_pair REPEATER * 2; alternate
+    CALL ani_delay;
+    REPEAT LITERAL(32/2), swap_pair REPEATER * 2; alternate
+    CALL ani_delay;
+;    goto breakout_reset; leave brkoutpx initialized to "off" color
+;    fps_init 1 sec; restore FPS timer
+    return;
+
+
+;send breakout px then delay for animation:
+ani_delay: DROP_CONTEXT;
+;    call brkoutpx_sendall;
+;    mov16 FSR0, LITERAL(brkoutpx);
+    render_busy TRUE;
+;ani_loop: DROP_CONTEXT
+;    mov8 WREG, INDF0_postinc
+;    call ws_send_palette
+;    wait_msec 100,; animation speed
+;    whilebit elapsed_fps, FALSE, ;goto no_fps_update
+    wait4frame YIELD, YIELD_AGAIN; 1/10 sec; assume breakout is written by now (takes < 1 msec)
+;    ifbit FSR0L, log2(64), !((brkoutpx + 32) & 64), goto ani_loop; send more breakout px
+    return;
+
+    THREAD_END;
+
+    EXPAND_POP
+    LIST_POP
+    messg end of hoist 6 @__LINE__
+;#else; too deep :(
+#endif
+#if HOIST == 5
+    messg hoist 5: brkout render thread @__LINE__
+    LIST_PUSH TRUE
+    EXPAND_PUSH FALSE
+;; breakout render thread ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+;RGB color indexes:
+;3 lsb control R/G/B on/off (for easier color combinations/debug):
+;4th bit is brightness
+    CONSTANT RED_RGBINX = 4;
+    CONSTANT GREEN_RGBINX = 2;
+    CONSTANT BLUE_RGBINX = 1;
+#define BRIGHT(rgb)  ((rgb) + 8); brighter variant
+    CONSTANT YELLOW_RGBINX = RED_RGBINX | GREEN_RGBINX;
+    CONSTANT CYAN_RGBINX = GREEN_RGBINX | BLUE_RGBINX;
+    CONSTANT MAGENTA_RGBINX = RED_RGBINX | BLUE_RGBINX;
+    CONSTANT PINK_RGBINX = MAGENTA_RGBINX; easier to spell :P
+    CONSTANT WHITE_RGBINX = RED_RGBINX | GREEN_RGBINX | BLUE_RGBINX;
+    CONSTANT OFF_RGBINX = 0; "black"
+    CONSTANT CUSTOM_RGBINX = BRIGHT(0); caller-defined palette entry
+;0, B, G, C, R, M, Y, W
+
+;indexed color palette:
+;palette consists of 15 hard-coded colors + 1 caller-defined custom color
+    nbDCL24 ccolor; caller-defined custom color
+;use EQU to show 32 bit values in .LST
+;primary colors (dim):
+PALETTE_#v(OFF_RGBINX) EQU LITERAL(0); off
+PALETTE_#v(RED_RGBINX) EQU LITERAL(0x000200); red dim
+PALETTE_#v(GREEN_RGBINX) EQU LITERAL(0x020000); green dim
+PALETTE_#v(YELLOW_RGBINX) EQU LITERAL(0x010100); yellow dim; try to keep consistent brightness with single colors
+PALETTE_#v(BLUE_RGBINX) EQU LITERAL(0x000002); blue dim
+PALETTE_#v(MAGENTA_RGBINX) EQU LITERAL(0x000101); magenta dim; try to keep consistent brightness with single colors
+PALETTE_#v(CYAN_RGBINX) EQU LITERAL(0x010001); cyan dim; try to keep consistent brightness with single colors
+PALETTE_#v(WHITE_RGBINX) EQU LITERAL(0x010101); white dim; try to keep consistent brightness with single colors
+;primary colors (bright):
+PALETTE_#v(BRIGHT(RED_RGBINX)) EQU LITERAL(0x00FF00); red bright
+PALETTE_#v(BRIGHT(GREEN_RGBINX)) EQU LITERAL(0xFF0000); green bright
+PALETTE_#v(BRIGHT(YELLOW_RGBINX)) EQU LITERAL(0x808000); yellow bright; try to keep consistent brightness with single colors
+PALETTE_#v(BRIGHT(BLUE_RGBINX)) EQU LITERAL(0x0000FF); blue bright
+PALETTE_#v(BRIGHT(MAGENTA_RGBINX)) EQU LITERAL(0x008080); magenta bright; try to keep consistent brightness with single colors
+PALETTE_#v(BRIGHT(CYAN_RGBINX)) EQU LITERAL(0x800080); cyan bright; try to keep consistent brightness with single colors
+PALETTE_#v(BRIGHT(WHITE_RGBINX)) EQU LITERAL(0x555555); white dim; try to keep consistent brightness with single colors
+PALETTE_#v(CUSTOM_RGBINX) EQU ccolor; caller-defined palette entry
+
+
+;display buffer:
+;#define NUMPX  #v(24 + 8); 24 px for first wspixel received + 8 px for fps
+;    b0DCL brkoutpx:#v(NUMPX/2); 1 nibble per pixel (color indexed); FSR# handles banking
+    b0DCL brkoutpx,:(24 + 8) / 1; 1/2 byte per pixel (color indexed): 24px for first rcv pixel + 8 px for fps; FSR# handles banking
+    find_msb ENDOF(brkoutpx);
+;    messg #v(FOUND_MSB), #v(ENDOF(brkoutpx)) @__LINE__
+;TODO? 4 bpp, 2 px/byte
+;TODO? linear addr?
+;check if fsr is at breakout eof:
+;CAUTION: uses linear addr + assumes power of 2
+;#define END_DETECT  SIZEOF(brkoutpx); (0x20 + 24+8); 0X40; BIT(5); CAUTION: only works with power of 2
+    if ENDOF(brkoutpx) == FOUND_MSB; can use single-bit check
+#define breakout_eof(yesno)  log2(ENDOF(brkoutpx)), IIF(brkoutpx & ENDOF(brkoutpx), !(yesno), yesno); BOOL2INT(brkoutpx & ENDOF(brkoutpx)) ^ BOOL2INT(yesno)
+    messg [INFO] #brkout pxbuf #v(SIZEOF(brkoutpx)) @#v(brkoutpx), eof@ #v(ENDOF(brkoutpx)), detect& #v(brkoutpx & ENDOF(brkoutpx)) @__LINE__
+;    ERRIF((ENDOF(brkoutpx) - 1) & END_DETECT == ENDOF(brkoutpx) & END_DETECT, [ERROR] pixelbuf end detect broken, !span #v(END_DETECT): #v(brkoutpx) @__LINE__)
+;    messg ENDOF(brkoutpx) #v(ENDOF(brkoutpx))
+;    messg log2(ENDOF(brkoutpx)) #v(log2(ENDOF(brkoutpx)))
+;    messg ENDOF(brkoutpx), #v(ENDOF(brkoutpx))
+    ERRIF(!log2(ENDOF(brkoutpx)), [ERROR] breakout pxbuf end detect !power of 2: #v(ENDOF(brkoutpx))"," simple bit test won''t work @__LINE__)
+#else
+    error TODO: brkoupx eof check: #v(ENDOF(brkoutpx)) @__LINE__
 #endif
 
-
-;misc arithmetic helpers:
-#define rdiv(num, den)  (((num)+(den)/2)/(den))  ;rounded divide (at compile-time)
-;#define divup(num, den)  (((num)+(den)-1)/(den))  ;round-up divide
-;#define err_rate(ideal, actual)  ((d'100'*(ideal)-d'100'*(actual))/(ideal))  ;%error
-;#define mhz(freq)  #v((freq)/ONE_SECOND)MHz  ;used for text messages
-;#define kbaud(freq)  #v((freq)/1000)kb  ;used for text messages
-;#define sgn(x)  IIF((x) < 0, -1, (x) != 0)  ;-1/0/+1
-;#define abs(x)  IIF((x) < 0, -(x), x)  ;absolute value
-#define MIN(x, y)  IIF((x) < (y), x, y)  ;use upper case so it won't match text within ERRIF/WARNIF messages
-#define MAX(x, y)  IIF((x) > (y), x, y)  ;use upper case so it won't match text within ERRIF/WARNIF messages
-
-
-;restore current macro expand directive:
-;kludge: fwd ref problem; put this one first
-    VARIABLE MEXPAND_STACK = 1  ;default is ON
-EXPAND_RESTORE MACRO
-    NOEXPAND  ;first turn it off to hide clutter in here
-    if !(MEXPAND_STACK & 1) ;leave listing off
-	EXITM
+;#define render_busy(yesno)  mov16 FSR0, LITERAL(IIF(yesno, brkoutpx, ENDOF(brkoutpx)))
+render_busy macro yesno
+    if !(yesno) && (ENDOF(brkoutpx) == FOUND_MSB); use single-bit check
+	setbit FSR0L, breakout_eof(TRUE); just set eof bit (faster than setting entire FSR0)
+	exitm
     endif
-    EXPAND  ;turn listing back on again
-    ENDM
+    mov16 FSR0, LITERAL(IIF(yesno, brkoutpx, ENDOF(brkoutpx)))
+    endm
 
+wait2render macro idler, idler2
+    EXPAND_PUSH FALSE
+;    ifbit FSR0L, breakout_eof(TRUE), idler; goto brkout_wait; log2(64), !((brkoutpx + 32) & 64), goto brkout_loop; nothing to send
+    idler; assume not ready yet, let other threads run
+    ifbit FSR0L, breakout_eof(TRUE), idler2; goto brkout_wait; log2(64), !((brkoutpx + 32) & 64), goto brkout_loop; nothing to send
+    EXPAND_POP
+    endm
 
-;error/debug assertion message macros:
-;******************************************************************************
-;show error message if condition is true:
-;params:
-; assert = condition that must (not) be true
-; message = message to display if condition is true (values can be embedded using #v)
-ERRIF MACRO assert, message, args
-    NOEXPAND  ;hide clutter
-    if assert
-	error message, args
-    endif
-    EXPAND_RESTORE
-    ENDM
+;swap a pair of pixels:
+swap_pair macro ofs
+    swapreg brkoutpx + ofs, brkoutpx + (ofs ^ 1)
+    endm
 
+;brkoutpx initial state:
+;    more_init TRUE;
+;    mov16 FSR0, LITERAL(brkoutpx);
+;    movlw OFF_RGBINX;
+;brkout_initloop:
+;    mov8 INDF0_postinc, WREG;
+;    ifbit FSR0L, breakout_eof(FALSE), goto brkout_initloop;
+;    more_init FALSE
 
-;show warning message if condition is true:
-;params:
-; assert = condition that must (not) be true
-; message = message to display if condition is true (values can be embedded using #v)
-WARNIF MACRO assert, message, args
-    NOEXPAND  ;hide clutter
-    if assert
-	messg message, args
-    endif
-    EXPAND_RESTORE
-    ENDM
+;breakout byte pixel colors:
+;#define FPS_RGBINX  CYAN_RGBINX
+;    CONSTANT BRKOUT#v(0)_RGBINX  RED_RGBINX; first byte
+;    CONSTANT BRKOUT#v(1)_RGBINX  GREEN_RGBINX; second byte
+;    CONSTANT BRKOUT#v(2)_RGBINX  BLUE_RGBINX; third byte
+;    CONSTANT BRKOUT#v(3)_RGBINX  CYAN_RGBINX; FPS
+;    CONSTANT BRKOUT#v(4)_RGBINX  MAGENTA_RGBINX; alternate FPS (heartbeat)
 
+    
+    THREAD_DEF brkout_render, 4
 
-;add lookup for non-power of 2:
-;find_log2 macro val
-;    LOCAL bit = 0;
-;    while BIT(bit)
-;	if BIT(bit) > 0
-;    messg #v(asmpower2), #v(oscpower2), #v(prescpower2), #v(asmbit)
-;	    CONSTANT log2(asmpower2) = asmbit
+#if 0; uses a lot of prog space
+;send palette entry to next WS pixel:
+    VARIABLE palinx = 0;
+    while palinx < 16
+ws_send_pal#v(palinx): DROP_CONTEXT;
+	ws_send_px PALETTE_#v(palinx), TRUE, YIELD, YIELD_AGAIN; 3x3 bytes
+	return;
+palinx += 1;
+    endw
+;in: WREG contains color index (4-bit value); caller can pack 2/byte if desired
+ws_send_palette: DROP_CONTEXT
+    andlw 0x0F;
+    brw;
+    while palinx < 16+16
+	goto ws_send_pal#v(palinx % 16); 3x3 bytes
+palinx += 1;
+    endw
+#endif
+;want expand to:
+;repeat:
+;;    ifbit xmit_ready(TRUE), goto around
+;;    YIELD;
+;;    ifbit xmit_ready(FALSE), YIELD_AGAIN; more efficient than goto $-3 + call
+;;    dont-goto repeat
+;;around:
+;    ifbit xmit_ready(FALSE), YIELD;
+;    ifbit xmit_ready(FALSE), YIELD_AGAIN; more efficient than goto $-3 + call
+    
+;in: WREG = palinx
+;piece:
+;  1, 2, 3 to get entire byte
+;or 1/3, 2/3, 3/3 to get SPI3x-encoded piece of byte
+;unneeded: get_palent_byte macro piece
+;    andlw 0x0F;
+;    brw
+;    LOCAL WHICH = SPI3x_detect(piece); 1, 2, 4 (SPI3x pieces) or 3, 6, 12 (bytes)
+;    LOCAL palinx = 0
+;    while palinx < 15
+;	if !(WHICH % 3); whole byte
+;	    retlw BYTEOF(PALETTE_#v(palinx), (piece) - 1);
+;	else; partial byte
+;	    ws_encbyte BYTE, 2/3; before wait so it's ready
+;    messg TODO: ^^^ needs work @__LINE__
+;	    return;
 ;	endif
-;ASM_MSB set asmpower2  ;remember MSB; assembler uses 32-bit values
-;asmpower2 *= 2
 ;    endm
 
-;log2 function:
-;converts value -> bit mask at compile time; CAUTION: assumes value is exact power of 2
-;usage: LOG2_#v(bit#) = power of 2
-;NOTE: only works for exact powers of 2
-;equivalent to the following definitions:
-;#define LOG2_65536  d'16'
-; ...
-;#define LOG2_4  2
-;#define LOG2_2  1
-;#define LOG2_1  0
-;#define LOG2_0  0
-#define log2(n)  LOG2_#v(n)
-;#define osclog2(freq)  OSCLOG2_#v(freq)
-;#define osclog2(freq)  log2((freq) / 250 * 256); kludge: convert clock freq to power of 2
-    CONSTANT log2(0) = 0 ;special case
-;    CONSTANT osc_log2(0) = 0;
-    VARIABLE asmbit = 0, asmpower2 = 1;, oscpower2 = 1, prescpower2 = 1;
-    while asmpower2 ;asmbit <= d'16'  ;-1, 0, 1, 2, ..., 16
-;	CONSTANT BIT_#v(IIF(bit < 0, 0, 1<<bit)) = IIF(bit < 0, 0, bit)
-	if asmpower2 > 0
-;    messg #v(asmpower2), #v(oscpower2), #v(prescpower2), #v(asmbit)
-	    CONSTANT log2(asmpower2) = asmbit
-;	    CONSTANT osclog2(oscpower2) = asmbit
-;	    CONSTANT log2(oscpower2) = asmbit
-;	    CONSTANT log2(prescpower2) = asmbit
-	endif
-ASM_MSB set asmpower2  ;remember MSB; assembler uses 32-bit values
-asmpower2 *= 2
-;oscpower2 *= 2
-;	if oscpower2 == 128
-;oscpower = 125
-;	endif
-;oscpower2 = IIF(asmpower2 != 128, IIF(asmpower2 != 32768, 2 * oscpower2, 31250), 125); adjust to powers of 10 for clock freqs
-;prescpower2 = IIF(asmpower2 != 128, IIF(asmpower2 != 32768, 2 * prescpower2, 31250), 122); adjust to powers of 10 for prescalars
-asmbit += 1
+;    init_more TRUE
+;    ws_breakout_setup;
+;    init_more FALSE;
+
+;use FSR0 to send breakout, leave FSR1 for caller to use for animation or render
+brkout_render: DROP_CONTEXT;
+    ws_breakout_setup; eusart init @SPI 3x (2.4 Mbps)
+    render_busy(FALSE); set empty outbuf
+;    mov16 FSR0, LITERAL(ENDOF(brkoutpx)); set empty outbuf
+brkout_loop: DROP_CONTEXT;
+;    setbit LATA, BREAKOUT, TRUE;
+;    wait4frame YIELD, YIELD_AGAIN; 1 sec
+;    NOP 16
+;    setbit LATA, BREAKOUT, FALSE;
+;    wait4frame YIELD, YIELD_AGAIN; 1 sec
+;    NOP 16
+;    ifbit FSR0L, breakout_eof(TRUE), YIELD; goto brkout_wait; log2(64), !((brkoutpx + 32) & 64), goto brkout_loop; nothing to send
+;    ifbit FSR0L, breakout_eof(TRUE), YIELD_AGAIN; goto brkout_wait; log2(64), !((brkoutpx + 32) & 64), goto brkout_loop; nothing to send
+    wait2render YIELD, YIELD_AGAIN; only yield 1x/breakout px; this prevents unexpected gaps during WS xmit (seems to be okay *between* WS px); breakout px only needs to be rendered when rcv_frame is idle (at end of frame)
+    VARIABLE pxpiece = 0;
+    while pxpiece < 3*3; each px takes 9 bytes (3 rgb bytes * 3 SPI bytes)
+;        wait2xmit YIELD, YIELD_AGAIN; wait before loading WREG to avoid save/restore
+        mov8 WREG, IIF(pxpiece == 9-1, INDF0_postinc, INDF0);
+        CALL get_palent_encpiece_#v(pxpiece);
+;        ws_send_byte WREG, TRUE, YIELD, YIELD_AGAIN;
+;       ws_encbyte BYTE, 2/3; after wait to protect WREG, but might cause latency
+        whilebit xmit_ready(FALSE), NULL_STMT; CAUTION: TX1IF !valid until 2 instr after TX1REG; do next byte prep first
+        mov8 TX1REG, WREG; start xmit
+pxpiece += 1
     endw
-    ERRIF log2(1) | log2(0), [ERROR] LOG2_ constants are bad: log2(1) = #v(log2(1)) and log2(0) = #v(log2(0)), should be 0  ;paranoid self-check
-    ERRIF log2(1024) != 10, [ERROR] LOG2_ constants are bad: log2(1024) = #v(log2(1024)), should be #v(10)  ;paranoid self-check
-;    ERRIF (log2(1 KHz) != 10) | (log2(1 MHz) != 20), [ERROR] OSCLOG2_ constants are bad: log2(1 KHz) = #v(log2(1 KHz)) and log2(1 MHz) = #v(log2(1 MHz)), should be 10 and 20 ;paranoid self-check
-;ASM_MSB set 0x80000000  ;assembler uses 32-bit values
-    ERRIF (ASM_MSB << 1) || !ASM_MSB, [ERROR] ASM_MSB incorrect value: #v(ASM_MSB << 1), #v(ASM_MSB)  ;paranoid check
+    GOTO brkout_loop;
 
 
-;#define WANT_HOIST
-;#define __FILE__ "wssplitter.asm" ;kludge: not a built-in MPASM def
-;#include __FILE__
-;    messg "hello 1.5"
-;#include "wssplitter.asm"
-;    messg "hello 1.6"
-;#undef WANT_HOIST
-;#ifndef WANT_HOIST
-;    messg "hello 3"
+generate_get_palent macro
+;    EXPAND_PUSH FALSE
+    VARIABLE palpiece = 0, palent = 0, pal_byte;
+    while palpiece < 3 * 3
+;	EXPAND_PUSH TRUE
+;pal byte HI first/second/third piece, byte MID first/second/third piece, byte LO first/second/third piece:
+	EMITL get_palent_encpiece_#v(palpiece): DROP_CONTEXT;
+;	addlw 7; kludge: move rgbinx 8 to last position in lookup table; this allows run-time code to take > 1 instr without additional jump
+	EMIT andlw 0x0F;
+	EMIT brw;
+;	EXPAND_POP
+	while palent < 16 * (palpiece + 1)
+	    if (palent % 16) != CUSTOM_RGBINX; const palette entries can be encoded at compile time
+;line too long :(	        retlw SPI3x_#v(palpiece % 3)(BYTEOF(PALETTE_#v(palent % 16), palpiece / 3));
+;		EXPAND_PUSH TRUE
+pal_byte = BYTEOF(PALETTE_#v(palent % 16), RGB_ORDER(palpiece / 3));
+		EMIT retlw SPI3x_#v(palpiece % 3)(pal_byte); #v(pal_byte)
+;		EXPAND_POP
+	    else
+		EMIT bra custom_palent_encpiece_#v(palpiece)
+	    endif
+palent += 1
+	endw
+;	EXPAND_PUSH TRUE
+	EMITL custom_palent_encpiece_#v(palpiece): DROP_CONTEXT;
+;line too long :(	ws_encbyte BYTEOF(PALETTE_#v(15), palpiece / 3), ((palpiece % 3) + 1) / 3; custom palette entry requires run-time computation
+pal_byte = BYTEOF(PALETTE_#v(CUSTOM_RGBINX), RGB_ORDER(palpiece / 3));
+	ws_encbyte pal_byte, ((palpiece % 3) + 1) / 3; custom palette entry requires run-time computation
+	EMIT return;
+;	EXPAND_POP
+palpiece += 1
+    endw
+;    EXPAND_POP
+    endm
+    generate_get_palent; kludge: need macro wrapper for expand push/pop
 
 
-;; config ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    THREAD_END;
+
+    EXPAND_POP
+    LIST_POP
+    messg end of hoist 5 @__LINE__
+;#else; too deep :(
+#endif
+#if HOIST == 3
+    messg hoist 3: app helpers @__LINE__
+    LIST_PUSH FALSE; TRUE
+    EXPAND_PUSH FALSE
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; WS281X stream input ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+;use CCP1 + Timer1 to get next bit of WS input stream:
+;for decode (first input pixel), single pulse mode is used to measure width of pulse
+;for wait (subsequent input pixels), input pulses are just counted as they pass through
+;see AN1473 for details about Single-Pulse mode
+;maybe also some useful tips on TU16A/B from https://github.com/microchip-pic-avr-examples/pic18f47q84-utmr-decoding-ws2812-datastream
+;no-only gives multiples of 4: #define T1SRC_FOSC  b'0010'; try to be as accurate as possible; should be in p16f15313.inc
+#define T1SRC_HFINTOSC  b'0011'; try to be as accurate as possible; should be in p16f15313.inc
+#define T1SRC_LC3OUT  b'1100'; should be in p16f15313.inc
+#define T1GATE_LC1OUT  b'01101'; LC1_out should be in p16f15313.inc
+#define T1GATE_LC4OUT  b'10000'; LC4_out should be in p16f15313.inc
+#define T1_prescale  log2(1) ;(0 << T1CKPS0); 1-to-1 pre-scalar
+;#define T1_prescale_wsbyte  log2(8); 1-to-8 pre-scalar
+#define WSBIT_THRESHOLD  (FOSC_FREQ / (2 MHz)); 0.5 usec @32 MHz 1:1 = 16 ticks
+;#define wait4_wsbit  whilebit PIR5, TMR1GIF, FALSE, ;goto $-1; wait acq
+;#define wait4_wsbyte  whilebit PIR4, TMR1IF, FALSE, ;goto $-1; wait for overflow (1 byte received)
+;    VARIABLE T1INIT_COUNT = 0
+;mode special values:
+    CONSTANT SETUP_FULL = 0x80;
+    CONSTANT SETUP_PART = 0x40;
+    CONSTANT SETUP_ONLY = 0x10;
+    CONSTANT WAIT_4PX = 2;
+    CONSTANT WANT_BIT = 1;
+ws_decode macro reg, mode, idler
+;    LOCAL wait_byte = ISLIT(reg); reg => decode bit, lit => wait byte
+    LOCAL wait_mode = (mode) & (WAIT_4PX | WANT_BIT);
+    LOCAL setup_mode = (mode) & (SETUP_FULL | SETUP_PART);
+    WARNIF(wait_mode != WAIT_4PX && wait_mode != WANT_BIT), [ERROR] which wait mode?, #v(mode));
+    WARNIF(setup_mode == (SETUP_FULL | SETUP_PART), [ERROR] which setup mode?, #v(mode));
+    if setup_mode; & (SETUP_FULL | SETUP_PART); want_init
+;	if !T1INIT_COUNT; only need to do this 1x
+	if (mode) & SETUP_FULL
+	    mov8 T1GPPS, LITERAL(RA#v(WSDI)); T1GSS_LC1OUT);
+	    mov8 T1CON, LITERAL(NOBIT(TMR1ON) | T1_prescale << T1CKPS0 | XBIT(T1SYNC) | BIT(T1RD16)); Timer 1 disabled during config, 1:1 prescalar, 16 bit read, async (ignored for GSPM)
+	    mov8 T1GATE, LITERAL(T1GATE_LC#v(WSPASS)OUT); RA3 already goes in to CLC1 so reuse it here; T1GPPS_PPS); =T1GPPS;
+	else; re-init
+	    setbit T1CON, TMR1ON, FALSE; is this needed?
+	endif
+	if (mode) & WAIT_4PX ;wait_byte; count bits
+	    mov8 T1GCON, LITERAL(NOBIT(T1GE) | NOBIT(T1GSPM) | BIT(T1GPOL) | NOBIT(T1GTM) | NOBIT(T1GGO)); always count, active high, no toggle, don't acquire yet
+	    mov8 T1CLK, LITERAL(LC#v(WSPASS)IN); ws input signal
+	else; decode bit
+	    mov8 T1GCON, LITERAL(BIT(T1GE) | BIT(T1GSPM) | BIT(T1GPOL) | NOBIT(T1GTM) | NOBIT(T1GGO)); Gate Single-Pulse mode, active high, no toggle, don't acquire yet
+	    mov8 T1CLK, LITERAL(T1SRC_HFINTOSC); 32 MHz (32.5 nsec reslution)
+	endif
+	setbit T1CON, TMR1ON, TRUE;
+;T1INIT_COUNT += 1
+	if (mode) & SETUP_ONLY; want_init == SETUP_ONLY
+	    exitm
+	endif
+    endif
+    if (mode) & WAIT_4PX; wait_byte
+;        ws_clrwdt FALSE; restart eof timeout
+;	mov16 TMR1, LITERAL(-8);
+;        setbit PIR4, TMR1IF, FALSE;
+;	ifbit PIR4, TMR1IF, FALSE, goto $-1; wait for overflow (1 byte received)
+;        whilebit PIR4, TMR1IF, FALSE, idler; wait for overflow (1 byte received)
+;	wait4_wsbyte idler
+;        ws_clrwdt FALSE; restart eof timeout
+;        wait_usec -1,; restart ws timeout
+        REPEAT reg, wait4px idler;
+	exitm
+    endif
+    setbit T1GCON, T1GGO, TRUE; start acq
+;    ifbit PIR5, TMR1GIF, FALSE, goto $-1; wait acq
+    whilebit PIR5, TMR1GIF, FALSE, idler; wait for acq
+;    wait4_wsbit idler
+    mov8 WREG, TMR1L
+    addlw (0 - WSBIT_THRESHOLD) & 0xFF; Borrow => ws 0 bit, !Borrow (Carry) => ws 1 bit
+    BANKCHK reg
+    BANKSAFE _ARG(F) rlf reg;, F; rotate Carry into lsb
+    endm
+
+;wait for 4 ws px:
+wait4px macro idler
+    REPEAT 4, waitpx idler; reset ws latch timeout after each px
+    endm
+
+;wait for ws px (24 data bits):
+waitpx macro idler
+;    setbit T1CON, TMR1ON, FALSE; is this needed?
+    mov16 TMR1, LITERAL(-3 * 8); 1 px (24 WS data bits)
+    setbit PIR4, TMR1IF, FALSE;
+;    setbit T1CON, TMR1ON, TRUE;
+;	ifbit PIR4, TMR1IF, FALSE, goto $-1; wait for overflow (1 byte received)
+    whilebit PIR4, TMR1IF, FALSE, idler; wait for overflow (1 byte received)
+    wait_usec -1,; restart ws timeout after each px rcv
+    endm
+
+
+;; WS281X stream output ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;see AN1606 for details about custom SPI peripheral using CLC + Timer2 + PWM + MSSP (CAUTION: AN1606 is half-speed)
+;see https://deepbluembedded.com/spi-tutorial-with-pic-microcontrollers/
+;don't see https://ww1.microchip.com/downloads/en/Appnotes/TB3192-Using-the-SPI-Module-on-8-Bit-PIC-MCUs-90003192A.pdf
+;TOO COMPLICATED!  
+;TOO COMPLICATED!
+;TOO COMPLICATED!
+;instead, just use EUSART in synchronous master mode to send WS281X data stream using SPI @3x speed
+
+
+;set up EUSART to send WS281X breakout data:
+;TOO COMPLICATED: generate WS breakout output via SPI using Timer 2, PWM, MSSP, using CLC to combine them:
+;see AN1606 using Timer 2 + PWM + MSSP (SPI Master) + CLC to generate WS281X stream is interesting but too complicated!
+;instead, just use EUSART in synchronous mode at 3x speed (2.4 MHz); only requires 1-to-3 encoding, no extra peripherals
+;RX/DT + TX/CK pins are output for sync xmit; TX/CK not needed by WS281X
+;serial data bits change on leading edge, one clock cycle per bit
+;xmit starts by writing to TX1REG
+#define OUTPPS_DT1  0x10; should be in p16f15313.inc
+#define OUTPPS_TX1_CK1  0x0F; should be in p16f15313.inc
+#define MY_BRG(freq)  (FOSC_FREQ / (freq) / 4 - 1); SYNC = 1, BRG16 = 1, BRGH = x
+    messg [INFO] uart 16-bit brg MY_BRG(2400 KHz)) = #v(MY_BRG(2400 KHz)) @__LINE__
+#define BRKOUT_BITREV; CAUTION: EUSART sends lsb first, WS281X wants msb first; need to reverse bit order :(
+#define TUNED(freq)  ((freq) * 10/9); use this in other freq calculations to compensate for OSCTUNE
+#define UNTUNED(freq)  ((freq) * 9/10); use this in other freq calculations to compensate for OSCTUNE
+ws_breakout_setup macro
+;    EXPAND_PUSH FALSE
+    mov8 RA#v(BREAKOUT)PPS, LITERAL(OUTPPS_DT1);
+#if 1; TX1/CK1 def = RA0, RX1/DT1 = RA1; can't just leave it that way (will override TRISA/LATA)??
+;https://www.microchip.com/forums/m973921.aspx
+    mov8 RX1DTPPS, LITERAL(RA#v(BREAKOUT)); kludge: datasheet says RX and DT should be same pin; RX never used so seems safe
+    mov8 TX1CKPPS, LITERAL(RA3);  kludge: don't want clock to go to an I/O pin (peripheral overrides pin general-purpose output); send it to RA3 which has no output driver
+    messg TODO: ^^^ are these 2 needed?; def = RA1/RA0; doc says DT and RX should be same pin in Sync mode
+#endif
+;    setbit TRISA, WSDI, TRUE; datasheet says to set TRIS for peripheral pins; that is just to turn off general-purpose output drivers
+    setbit TRISA, RA#v(BREAKOUT), TRUE; datasheet says to set TRIS for peripheral pins (to turn off general-purpose output drivers)
+;AN244 says OSCTUNE will adjust FSOC +/-12%; to get -10%, use 10%/12% * 0x20 ~= 0x1B; NOTE: this is just approx since temp also affects FOSC
+    mov8 OSCTUNE, LITERAL(0x20 * 10/12); -32 & 0xFF); 32 MHz / 12 => 2.7 MHz which is slightly too fast for WS281x; need to slow it down 10%; 0x1f = max, 0x20 = min, 0 = center freq
+    mov8 RC1STA, LITERAL(NOBIT(SPEN) | NOBIT(SREN) | NOBIT(CREN)); disable EUSART during config, disable single + continuous rcv (for xmit mode)
+;NOTE NOTE NOTE NOTE NOTE: datasheet says TXEN will be overridden by SYNC, but TX1IF won't be set unless TXEN is set!
+    mov8 TX1STA, LITERAL(BIT(CSRC) | NOBIT(TX9) | BIT(TXEN) | BIT(SYNC_TXSTA) | BIT(BRGH)); enable sync master mode, high baud rate (ignored?), disable rcv; NOTE: SREN/CREN overrides TXEN in Sync mode; TXEN + BRGH ignored but set just in case datasheet is wrong
+;TODO: use 9-bit xmit for easier 3x encode?
+    mov8 BAUD1CON, LITERAL(NOBIT(SCKP) | BIT(BRG16)); idle clock low (data changes on rising edge), 16-bit BRG
+    mov16 SP1BRG, LITERAL(MY_BRG(2400 KHz)); 2.66mbps @Fosc 32MHz => 2; use OSCTUNE to slow it down 10% to 2.4mbps
+    setbit RC1STA, SPEN, TRUE; enable after config
+;    mov8 TX1REG, LITERAL(0); kludge: force TX1IF?
+;don't set PIE3.TX1IE or INTCON.PEIE, INTCON.GIE; don't need ints
+;    EXPAND_POP
+    endm
+
+
+;wait for space available in WS SPI xmit buf:
+#define xmit_ready(yesno)  PIR3, TX1IF, yesno
+
+;wait for xmit buf available:
+wait2xmit macro idler, idler2
+;    EXPAND_PUSH FALSE
+ ;messg wait4frame: idler, idler2, #threads = #v(NUM_THREADS)
+;    ifbit xmit_ready(FALSE), idler; bit !ready yet, let other threads run
+    idler; assume not ready yet, let other threads run
+    ifbit xmit_ready(FALSE), idler2; more efficient than goto $-3 + call
+;    EXPAND_POP
+    endm
+
+
+#define RGB_ORDER(n)  RGB_#v(n); (n) % 3)
+#ifdef RGSWAP; set color order
+;line too long :( #define RGB_ORDER(n)  (((RGSWAP >> (8 - 4 * (n))) & 0xF) - 1)
+    CONSTANT RGB_#v(0) = (((RGSWAP >> 8) & 0xF) - 1);
+    CONSTANT RGB_#v(1) = (((RGSWAP >> 4) & 0xF) - 1);
+    CONSTANT RGB_#v(2) = (((RGSWAP >> 0) & 0xF) - 1);
+    messg [DEBUG] rgb order RGSWAP, R = #v(RGB_ORDER(0)), G = #v(RGB_ORDER(1)), B = #v(RGB_ORDER(2)) @__LINE__
+#else; default color order R,G,B (0x123)
+; #define RGB_ORDER(n)  ((n) % 3)
+    CONSTANT RGB_#v(0) = 0;
+    CONSTANT RGB_#v(1) = 1;
+    CONSTANT RGB_#v(2) = 2;
+#endif
+
+
+;send 24 bit color code to next WS281X breakout pixel:
+;ws_sendpx macro rgb, want_wait, idler
+;    LOCAL RGB = rgb ;kludge; force eval (avoids "missing operand" and "missing argument" errors/MPASM bugs); also helps avoid "line too long" messages (MPASM limit 200)
+;;~ 10 usec/byte synchronous
+;    if ISLIT(RGB); constant (optimized)
+;	ws_sendbyte LITERAL(RGB >> 16 & 0xFF), want_wait, idler;
+;	ws_sendbyte LITERAL(RGB >> 8 & 0xFF), want_wait, idler;
+;	ws_sendbyte LITERAL(RGB & 0xFF), want_wait, idler;
+;    else; register
+;	ws_sendbyte REGHI(rgb), want_wait, idler;
+;	ws_sendbyte REGMID(rgb), want_wait, idler;
+;	ws_sendbyte REGLO(rgb), want_wait, idler;
+;    endif
+;    endm
+;send next WS pixel (24-bit RGB value):
+ws_send_px macro rgb24, wait_first, first_idler, more_idler
+; messg HIBYTE(rgb24)
+; messg MIDBYTE(rgb24)
+; messg LOBYTE(rgb24)
+    LOCAL HI;
+HI = HIBYTE(rgb24); line too long :(
+    LOCAL MID;
+MID = MIDBYTE(rgb24);
+    LOCAL LO;
+LO = LOBYTE(rgb24);
+    ws_send_byte HI_BYTE, wait_first, first_idler, more_idler; REGHI(rgb24);
+    ws_send_byte MID, wait_first, first_idler, more_idler; REGMID(rgb24);
+    ws_send_byte LO_BYTE, wait_first, first_idler, more_idler; REGLO(rgb24);
+    endm
+
+
+;send next byte of WS pixel:
+;send byte to next WS breakout pixel
+;NO-CAUTION: idler must preserve WREG
+;CAUTION: in order to avoid overwriting WREG in idler, encoding is done after wait
+; this must be done far enough ahead of time to not cause a delay in xmit (~0.5 usec)
+;UART has 2 byte FIFO so app can work ahead up to 2 SPI bytes = 2/3 WS byte ~= 6.7 usec
+;idler:
+;- for single-threaded busy-wait, use first_idler = goto $-1, more_idler = null
+;- for multi-threaded, use first_idler = call YIELD, more_idler = goto YIELD_AGAIN
+ws_send_byte macro byte, wait_first, first_idler, more_idler
+    LOCAL BYTE = byte;
+;    wait2xmit TRUE, goto yield_again;
+;    mov8 TX1REG, SPI3x_hi; LITERAL(BYTEOF(SPI3x, 0)); TODO: IOR data bits
+;    wait2xmit WREG, call yield;
+;    mov8 TX1REG, SPI3x_mid; LITERAL(BYTEOF(SPI3x, 1)); TODO: IOR data bits
+;    wait2xmit WREG, call yield;
+;    mov8 TX1REG, SPI3x_lo; LITERAL(BYTEOF(SPI3x, 2)); TODO: IOR data bits
+;each WS bit is sent as 3 SPI bits: (leader high + data actual + trailer low):
+;no    ws_encbyte BYTE, 1/3; before wait so it's ready
+;    wait2xmit wait_first, idler
+    if wait_first
+;        whilebit xmit_ready(FALSE), idler; PIR3, TX1IF, FALSE, idler; max wait ~= ~3.75 usec @2.67MHz
+;	ifbit xmit_ready(FALSE), first_idler;
+;        ifbit xmit_ready(FALSE), more_idler;
+	wait2xmit first_idler, more_idler;
+    endif
+;    YIELD SAVE_WREG; assume xmit !ready yet and let other threads run
+;    ifbit xmit_ready(FALSE), YIELD_AGAIN; more efficient than goto $-3 + call
+    ws_encbyte BYTE, 1/3; after wait to protect WREG, but might cause latency
+    mov8 TX1REG, WREG; start xmit
+;no    ws_encbyte BYTE, 2/3; before wait so it's ready
+;    wait2xmit TRUE, idler
+;    whilebit xmit_ready(FALSE), idler; PIR3, TX1IF, FALSE, idler; max wait ~= ~3.75 usec @2.67MHz
+;    YIELD SAVE_WREG; assume xmit !ready yet and let other threads run
+;    ifbit xmit_ready(FALSE), YIELD_AGAIN; more efficient than goto $-3 + call
+;    ifbit xmit_ready(FALSE), first_idler;
+;    ifbit xmit_ready(FALSE), more_idler;
+    wait2xmit first_idler, more_idler;
+    ws_encbyte BYTE, 2/3; after wait to protect WREG, but might cause latency
+    mov8 TX1REG, WREG; start xmit
+;no    ws_encbyte BYTE, 3/3; before wait so it's ready
+;    wait2xmit TRUE, idler
+;    whilebit xmit_ready(FALSE), idler; PIR3, TX1IF, FALSE, idler; max wait ~= ~3.75 usec @2.67MHz
+;    YIELD SAVE_WREG; assume xmit !ready yet and let other threads run
+;    ifbit xmit_ready(FALSE), YIELD_AGAIN; more efficient than goto $-3 + call
+;    ifbit xmit_ready(FALSE), first_idler;
+;    ifbit xmit_ready(FALSE), more_idler;
+    wait2xmit first_idler, more_idler;
+    ws_encbyte BYTE, 3/3; after wait to protect WREG, but might cause latency
+    mov8 TX1REG, WREG; start xmit
+    endm
+
+
+;SPI3x piece detector:
+;1/3, 2/3, 3/3 for SPI3x-encoded piece of byte
+;1, 2, 3 for entire byte
+;#define SPI3x_detect(piece)  SPI3x_#v(0)piece; kludge: #v() used for token-pasting
+;    CONSTANT SPI3x_#v(0)1 = 3*1; SPI3x_detect(1/3) == 1, SPI3x_detect(1) == 3
+;    CONSTANT SPI3x_#v(0)2 = 3*2; SPI3x_detect(2/3) == 2, SPI3x_detect(2) == 6
+;    CONSTANT SPI3x_#v(0)3 = 3*4; SPI3x_detect(3/3) == 4, SPI3x_detect(3) == 12; CAUTION: avoid "3" conflict for 3/3
+
+;WS bit encoded for SPI 3x:  b'1X01X01X01X01X01X01X01X0'; 1 = leader, X = actual data, 0 = trailer
+;    CONSTANT SPI3x = LITERAL(SPI3x_hi(0) << 16 | SPI3x_MID(0) << 8 | SPI3x_lo(0) << 0); b'100100100100100100100100'); 0x924924; each WS bit is sent as 3 SPI bits: (leader high + data actual + trailer low)
+;    CONSTANT SPI3x_hi = HIBYTE(SPI3x); first byte of WS pixel
+;    CONSTANT SPI3x_mid = MIDBYTE(SPI3x); second byte
+;    CONSTANT SPI3x_lo = LOBYTE(SPI3x); third byte
+;    messg #v(SPI3x_hi), #v(SPI3x_mid), #v(SPI3x_lo) @__LINE__
+
+#ifdef BRKOUT_BITREV; reverse bit order (byte order is correct)
+    messg [INFO] reversing breakout bit order (EUSART sends lsb first) @__LINE__
+; #define REVBYTE(n)  (2 - (n)); 0, 1, 2
+; #define BRKOUT_BIT(n)  (7 - (n)); 0..7
+; #define BRKOUT_BITVAL(n)  (0x80 >> (n))
+;use consts to avoid line too long :(
+ #define BRKOUT_BYTE(byte)  BRKOUT_BYTE_#v(byte)
+generate_brkout_bytes macro
+    LOCAL revbyte = 0, revbit, brkout_byte;
+    while revbyte < 0x100
+brkout_byte = 0
+revbit = 0
+	while revbit < 8
+brkout_byte |= BOOL2INT(revbyte & BIT(revbit)) * REVBIT(revbit);
+revbit += 1;
+	endw
+	CONSTANT BRKOUT_BYTE_#v(revbyte) = #v(brkout_byte);
+revbyte += 1
+    endw
+    endm
+    generate_brkout_bytes
+; #define SPI3x_FIRST(byte)  (b'00100100' | BOOL2INT((byte) & BIT(0)) << 6 | BOOL2INT((byte) & BIT(1)) << 3 | BOOL2INT((byte) & BIT(2)) << 0); set first 3 WS data bits
+; #define SPI3x_MID(byte)  (b'10010010' | BOOL2INT((byte) & BIT(3)) << 5 | BOOL2INT((byte) & BIT(4)) << 2); set next 2 WS data bits
+; #define SPI3x_LAST(byte)  (b'01001001' | BOOL2INT((byte) & BIT(5)) << 7 | BOOL2INT((byte) & BIT(6)) << 4 | BOOL2INT((byte) & BIT(7)) << 1); set last 3 WS data bits
+; #define SPI3x_bit_#v(7)  b'01000000'; insert first WS data bit
+; #define SPI3x_bit_#v(6)  b'00001000'; 2nd WS bit
+; #define SPI3x_bit_#v(5)  b'00000001'; 3rd WS bit
+; #define SPI3x_bit_#v(4)  b'00100000'; 4th WS bit
+; #define SPI3x_bit_#v(3)  b'00000100'; 5th WS bit
+; #define SPI3x_bit_#v(2)  b'10000000'; 6th WS bit
+; #define SPI3x_bit_#v(1)  b'00010000'; 7th WS bit
+; #define SPI3x_bit_#v(0)  b'00000010'; last WS bit
+#else; normal order
+; #define REVBYTE(n)  (n); 0, 1, 2
+; #define BRKOUT_BIT(n)  (n); 0..7
+; #define BRKOUT_BITVAL(n)  (1 << (n))
+ #define BRKOUT_BYTE(byte)  (byte)
+; #define SPI3x_FIRST(byte)  (b'10010010' | BOOL2INT((byte) & BIT(7)) << 6 | BOOL2INT((byte) & BIT(6)) << 3 | BOOL2INT((byte) & BIT(5)) << 0); set first 3 WS data bits
+; #define SPI3x_MID(byte)  (b'01001001' | BOOL2INT((byte) & BIT(4)) << 5 | BOOL2INT((byte) & BIT(3)) << 2); set next 2 WS data bits
+; #define SPI3x_LAST(byte)  (b'00100100' | BOOL2INT((byte) & BIT(2)) << 7 | BOOL2INT((byte) & BIT(1)) << 4 | BOOL2INT((byte) & BIT(0)) << 1); set last 3 WS data bits
+; #define SPI3x_bit_#v(7)  b'01000000'; insert first WS data bit
+; #define SPI3x_bit_#v(6)  b'00001000'; 2nd WS bit
+; #define SPI3x_bit_#v(5)  b'00000001'; 3rd WS bit
+; #define SPI3x_bit_#v(4)  b'00100000'; 4th WS bit
+; #define SPI3x_bit_#v(3)  b'00000100'; 5th WS bit
+; #define SPI3x_bit_#v(2)  b'10000000'; 6th WS bit
+; #define SPI3x_bit_#v(1)  b'00010000'; 7th WS bit
+; #define SPI3x_bit_#v(0)  b'00000010'; last WS bit
+#endif
+;#define SPI3x_FIRST(byte)  (REVBYTE(b'01001001') | BOOL2INT((byte) & BIT(7)) << REVBIT(6) | BOOL2INT((byte) & BIT(6)) << REVBIT(3) | BOOL2INT((byte) & BIT(5)) << REVBIT(0)); set first 3 WS data bits
+;#define SPI3x_MID(byte)  (REVBYTE(b'10010010') | BOOL2INT((byte) & BIT(4)) << REVBIT(5) | BOOL2INT((byte) & BIT(3)) << REVBIT(2)); set next 2 WS data bits
+;#define SPI3x_LAST(byte)  (REVBYTE(b'00100100') | BOOL2INT((byte) & BIT(2)) << REVBIT(7) | BOOL2INT((byte) & BIT(1)) << REVBIT(4) | BOOL2INT((byte) & BIT(0)) << REVBIT(1)); set last 3 WS data bits
+;#define SPI3x_FIRST(byte)  (BRKOUT_BITVAL(7) | BOOL2INT((byte) & BIT(7)) * BRKOUT_BITVAL(6) | BRKOUT_BITVAL(4) | BOOL2INT((byte) & BIT(6)) * BRKOUT_BITVAL(3) | BRKOUT_BITVAL(1) | BOOL2INT((byte) & BIT(5)) * BRKOUT_BITVAL(0); set first 3 WS data bits
+;#define SPI3x_MID(byte)  (BRKOUT_BITVAL(6) | BOOL2INT((byte) & BIT(4)) * BRKOUT_BITVAL(5) | BRKOUT_BITVAL(3) | BOOL2INT((byte) & BIT(3)) * BRKOUT_BITVAL(2); set next 2 WS data bits
+;#define SPI3x_LAST(byte)  (REVBYTE(b'00100100') | BOOL2INT((byte) & BIT(2)) << REVBIT(7) | BOOL2INT((byte) & BIT(1)) << REVBIT(4) | BOOL2INT((byte) & BIT(0)) << REVBIT(1)); set last 3 WS data bits
+#define SPI3x_FIRST(byte)  BRKOUT_BYTE(b'10010010' | BOOL2INT((byte) & BIT(7)) << 6 | BOOL2INT((byte) & BIT(6)) << 3 | BOOL2INT((byte) & BIT(5)) << 0); set first 3 WS data bits
+#define SPI3x_MID(byte)  BRKOUT_BYTE(b'01001001' | BOOL2INT((byte) & BIT(4)) << 5 | BOOL2INT((byte) & BIT(3)) << 2); set next 2 WS data bits
+#define SPI3x_LAST(byte)  BRKOUT_BYTE(b'00100100' | BOOL2INT((byte) & BIT(2)) << 7 | BOOL2INT((byte) & BIT(1)) << 4 | BOOL2INT((byte) & BIT(0)) << 1); set last 3 WS data bits
+;byteof aliases:
+#define SPI3x_0(byte)  SPI3x_FIRST(byte)
+#define SPI3x_1(byte)  SPI3x_MID(byte)
+#define SPI3x_2(byte)  SPI3x_LAST(byte)
+
+
+;encode a ws byte into SPI3x format:
+;each WS bit is sent as 3 SPI bits: (leader high + data actual + trailer low)
+;which = 1/3 for first (leader) part, 2/3 for second (data) part, and 3/3 for third (trailer) part
+    VARIABLE WSENC_TEMP = -1; temp var; -1 == not used
+ws_encbyte macro byte, which
+;    EXPAND_PUSH FALSE
+    LOCAL BYTE = byte;
+    LOCAL WHICH = 3 * which; 1, 2, 3; NOTE: don't use () here, need to handle fractions
+;    ERRIF(BYTE == WREG, [ERROR] encbyte from WREG !implemented, @__LINE__);
+    if byte == WREG
+	if WSENC_TEMP == -1
+	    nbDCL ws_encbyte_temp,;
+	    messg [INFO] allocated extra temp for ws_encbyte @__LINE__;
+WSENC_TEMP = ws_encbyte_temp;
+	endif
+	mov8 WSENC_TEMP, WREG; save WREG to temp
+BYTE = WSENC_TEMP;
+    endif
+    if WHICH == 1
+	if ISLIT(BYTE); compile-time
+	    MOVLW SPI3x_FIRST(BYTE); b'10010010' | BOOL2INT(BYTE & BIT(7)) << 6 | BOOL2INT(BYTE & BIT(6)) << 3 | BOOL2INT(BYTE & BIT(5)) << 0; set first 3 WS data bits
+	else; run-time
+;	    if byte == WREG; avoid overwriting bits
+;		andlw b'11100000';
+;		ifbit BYTE, 5, TRUE, iorlw b'00000001'; 3rd WS bit
+;		ifbit BYTE, 6, TRUE, iorlw b'00001000'; 2nd WS bit
+;		andlw b'10011111';
+;		ifbit BYTE, 7, TRUE, iorlw b'01000000'; insert first WS data bit
+;		iorlw b'10010010'; set leading part-bits for first 3 WS data bits
+;	    else
+	    MOVLW SPI3x_FIRST(0); b'10010010'; set leading part-bits for first 3 WS data bits
+	    ifbit BYTE, 7, TRUE, IORLW BRKOUT_BYTE(b'01000000'); insert first WS data bit
+	    ifbit BYTE, 6, TRUE, IORLW BRKOUT_BYTE(b'00001000'); 2nd WS bit
+	    ifbit BYTE, 5, TRUE, IORLW BRKOUT_BYTE(b'00000001'); 3rd WS bit
+;	    endif
+	endif
+;	EXPAND_POP
+	exitm
+    endif
+    if WHICH == 2
+	if ISLIT(BYTE); compile-time
+	    MOVLW SPI3x_MID(BYTE); b'01001001' | BOOL2INT(BYTE & BIT(4)) << 5 | BOOL2INT(BYTE & BIT(3)) << 2; set next 2 WS data bits
+	else; run-time
+;	    if byte == WREG; avoid overwriting bits
+;		andlw b'00011000';
+;		ifbit BYTE, 4, TRUE, iorlw b'00100000'; 4th WS bit
+;		ifbit BYTE, 3, TRUE, iorlw b'00000100'; 5th WS bit
+;		andlw b'11100111';
+;		iorlw b'01001001'; set leading part-bits for next 3 WS data bits
+;	    else
+	    MOVLW SPI3x_MID(0); b'01001001'; set leading part-bits for next 3 WS data bits
+	    ifbit BYTE, 4, TRUE, IORLW BRKOUT_BYTE(b'00100000'); 4th WS bit
+	    ifbit BYTE, 3, TRUE, IORLW BRKOUT_BYTE(b'00000100'); 5th WS bit
+;	    endif
+	endif
+;	EXPAND_POP
+	exitm
+    endif
+    if WHICH == 3
+	if ISLIT(BYTE); compile-time
+	    MOVLW SPI3x_LAST(BYTE); b'00100100' | BOOL2INT(BYTE & BIT(2)) << 7 | BOOL2INT(BYTE & BIT(1)) << 4 | BOOL2INT(BYTE & BIT(0)) << 1; set last 3 WS data bits
+	else; run-time
+;	    if byte == WREG; avoid overwriting bits
+;		andlw b'00000111';
+;		ifbit BYTE, 2, TRUE, iorlw b'10000000'; 6th WS bit
+;		ifbit BYTE, 1, TRUE, iorlw b'00010000'; 7th WS bit
+;		andlw b'11111001';
+;		ifbit BYTE, 0, TRUE, iorlw b'00000010'; last WS bit
+;		andlw b'11111110';
+;		iorlw b'00100100'; set leading part-bits for last 2 WS data bits
+;	    else
+	    MOVLW SPI3x_LAST(0); b'00100100'; set leading part-bits for last 2 WS data bits
+	    ifbit BYTE, 2, TRUE, IORLW BRKOUT_BYTE(b'10000000'); 6th WS bit
+	    ifbit BYTE, 1, TRUE, IORLW BRKOUT_BYTE(b'00010000'); 7th WS bit
+	    ifbit BYTE, 0, TRUE, IORLW BRKOUT_BYTE(b'00000010'); last WS bit
+;	    endif
+	endif
+;	EXPAND_POP
+	exitm
+    endif
+    error [ERROR] unknown ws "byte" part: which ==> #v(WHICH) @__LINE__
+;    EXPAND_POP
+    endm
+
+
+;; FPS tracking ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;    nbDCL FPS,; breakout value (used as counter until breakout is refreshed)
+;    nbDCL numfr,; internal counter
+
+
+;set up recurring frames:
+;uses Timer 0 rollover as recurring 1 sec elapsed timer
+;also used for frame timer during power-on breakout animation
+;nope-uses NCO for 1 sec interval; other timers are busy :(
+;#define NICKS_FOSC  b'0000'; should be in p16f15313.inc
+;#define NCO_ROLLOVER  FOSC_FREQ
+;#define wait4_1sec  ifbit PIR7, NCO1IF, FALSE, goto $-1
+;#define T2SRC_FOSC  b'0010'; run Timer2 at same speed as Fosc (16 MHz)
+;    VARIABLE T0_WAITCOUNT = 0; generate unique labels; also remembers init
+;    CONSTANT MAX_ACCURACY = 1 << 20; 1 MHz; max accuracy to give caller; use nop for < 1 usec delays
+#define T0SRC_FOSC4  b'010'; FOSC / 4; should be in p16f15313.inc
+#define T0_prescaler(freq)  prescaler(FOSC_FREQ/4, freq); log2(FOSC_FREQ / 4 / (freq)); (1 MHz)); set pre-scalar for 1 usec ticks
+;#define T0_prescfreq(prescaler)  (FOSC_FREQ / 4 / BIT(prescaler)); (1 MHz)); set pre-scalar for 1 usec ticks
+;    messg ^^ REINSTATE @__LINE__
+;#define T0_postscaler  log2(1); 1-to-1 post-scalar
+;#define T0_ROLLOVER  50; 50 ticks @1 usec = 50 usec; WS281X latch time = 50 usec
+;    messg [DEBUG] T0 prescaler = #v(T0_prescale), should be 2 (1:4) @__LINE__
+;#define MY_T0CON1(tick_freq)  (T0SRC_FOSC4 << T0CS0 | NOBIT(T0ASYNC) | T0_prescaler(tick_freq) << T0CKPS0); FOSC / 4, sync, pre-scalar TBD (1:1 for now)
+;#define SETUP_NOWAIT  ORG $-1; idler to use for no-wait, setup only
+;#define wait4_t1tick  ifbit PIR5, TMR1GIF, FALSE, goto $-1; wait acq
+#define elapsed_fps  PIR0, TMR0IF
+    CONSTANT MAX_T0PRESCALER = log2(32768), MAX_T0POSTSC = log2(16);
+fps_init macro interval_usec;, enable_ints; wait_usec macro delay_usec, idler
+;    EXPAND_PUSH FALSE
+    LOCAL USEC = TUNED(interval_usec); CAUTION: compensate for OSCTUNE (set by ws_breakout_setup)
+;    mov8 NCO1CON, LITERAL(NOBIT(N1EN) | NOBIT(N1POL) | NOBIT(N1PFM)); NCO disable during config, active high, fixed duty mode
+;    mov8 NCO1CLK, LITERAL(N1CKS_FOSC << N1CKS0); pulse width !used
+;    mov24 NCO1INC, LITERAL(1)
+;    setbit INTCON, GIE, FALSE; disable interrupts (in case waiting for 50 usec WS latch signal)
+;    if usec == 1
+;    movlw ~(b'1111' << T0CKPS0) & 0xFF; prescaler bits
+;    BANKCHK T0CON1
+;    andwf T0CON1, F; strip previous prescaler
+;    MESSG fps_init delay_usec @__LINE__;
+;    if !WAIT_COUNT; first time init
+;        mov8 T0CON0, LITERAL(NOBIT(T0EN) | NOBIT(T016BIT) | T0_postscaler << T0OUTPS0); Timer 0 disabled during config, 8 bit mode, 1:1 post-scalar
+;    else
+;        setbit T0CON0, T0EN, FALSE;
+;    endif
+;    LOCAL ACCURACY = MAX_ACCURACY; 1 MHz; max accuracy to give caller; use nop for < 1 usec delays
+    LOCAL PRESCALER = 3, POSTSCALER; not < 1 usec needed (8 MIPS @1:8)
+    LOCAL T0tick, LIMIT, ROLLOVER;
+;    LOCAL FREQ_FIXUP; = FOSC_FREQ / 4 / BIT(PRESCALER);
+;    while ACCURACY >= 1 << 7; 125 Hz
+    messg [TODO] change this to use postscaler 1..16 instead of just powers of 2 (for more accuracy) @__LINE__
+    while PRESCALER <= MAX_T0PRESCALER + MAX_T0POSTSC; use smallest prescaler for best accuracy
+;T0FREQ = FOSC_FREQ / 4 / BIT(PRESCALER); T0_prescfreq(PRESCALER);
+T0tick = scale(FOSC_FREQ/4, PRESCALER); BIT(PRESCALER) KHz / (FOSC_FREQ / (4 KHz)); split 1M factor to avoid arith overflow; BIT(PRESCALER - 3); usec
+;presc 1<<3, freq 1 MHz, period 1 usec, max delay 256 * usec
+;presc 1<<5, freq 250 KHz, period 4 usec, max delay 256 * 4 usec ~= 1 msec
+;presc 1<<8, freq 31250 Hz, period 32 usec, max delay 256 * 32 usec ~= 8 msec
+;presc 1<<13, freq 976.6 Hz, period 1.024 msec, max delay 256 * 1.024 msec ~= .25 sec
+;presc 1<<15, freq 244.1 Hz, period 4.096 msec, max delay 256 * 4.096 msec ~= 1 sec
+LIMIT = 256 * T0tick; (1 MHz / T0FREQ); BIT(PRESCALER - 3); 32 MHz / (FOSC_FREQ / 4); MAX_ACCURACY / ACCURACY
+;	messg [DEBUG] wait #v(interval_usec) usec: prescaler #v(PRESCALER) => limit #v(LIMIT) @__LINE__
+;        messg tick #v(T0tick), presc #v(PRESCALER), max delay #v(LIMIT) usec @__LINE__
+	if USEC <= LIMIT; ) || (PRESCALER == MAX_T0PRESCALER); this prescaler allows interval to be reached
+POSTSCALER = MAX(PRESCALER - MAX_T0PRESCALER, 0); line too long :(
+PRESCALER = MIN(PRESCALER, MAX_T0PRESCALER);
+ROLLOVER = rdiv(USEC, T0tick); 1 MHz / T0FREQ); / BIT(PRESCALER - 3)
+	    messg [DEBUG] fps_init #v(interval_usec) (#v(USEC) tuned) "usec": "prescaler" #v(PRESCALER)+#v(POSTSCALER), max intv #v(LIMIT), actual #v(ROLLOVER * T0tick), rollover #v(ROLLOVER) @__LINE__
+;    messg log 2: #v(FOSC_FREQ / 4) / #v(FOSC_FREQ / 4 / BIT(PRESCALER)) = #v(FOSC_FREQ / 4 / (FOSC_FREQ / 4 / BIT(PRESCALER))) @__LINE__; (1 MHz)); set pre-scalar for 1 usec ticks
+;FREQ_FIXUP = MAX(1 MHz / T0tick, 1); T0FREQ;
+;	    if T0FREQ * BIT(PRESCALER) != FOSC_FREQ / 4; account for rounding errors
+;	    if T0tick * FREQ_FIXUP != 1 MHz; account for rounding errors
+;	        messg freq fixup: equate #v(FOSC_FREQ / 4 / MAX(FREQ_FIXUP, 1)) to #v(BIT(PRESCALER)) for t0freq #v(FREQ_FIXUP) fixup @__LINE__
+;		CONSTANT log2(FOSC_FREQ/4 / FREQ_FIXUP) = PRESCALER; kludge: apply prescaler to effective freq
+;	    endif
+	    mov8 T0CON0, LITERAL(NOBIT(T0EN) | NOBIT(T016BIT) | POSTSCALER << T0OUTPS0); Timer 0 disabled during config, 8 bit mode, 1:1 post-scalar
+	    mov8 T0CON1, LITERAL(T0SRC_FOSC4 << T0CS0 | NOBIT(T0ASYNC) | PRESCALER << T0CKPS0); FOSC / 4, sync, pre-scalar
+	    mov8 TMR0L, LITERAL(0); restart count-down with new limit
+	    mov8 TMR0H, LITERAL(ROLLOVER - 1); (usec) / (MAX_ACCURACY / ACCURACY) - 1);
+	    setbit T0CON0, T0EN, TRUE;
+	    setbit elapsed_fps, FALSE; clear previous interrupt
+;	    if !WAIT_COUNT ;first time init
+;	    if enable_ints
+;	        setbit PIE0, TMR0IE, TRUE; no, just polled
+;	    endif
+;wait_loop#v(WAIT_COUNT):
+;WAIT_COUNT += 1
+;	    idler;
+;	    if $ < wait_loop#v(WAIT_COUNT - 1); reg setup only; caller doesn't want to wait
+;		ORG wait_loop#v(WAIT_COUNT - 1)
+;		exitm
+;	    endif
+;assume idler handles BSR + WREG tracking; not needed:
+;	    if $ > wait_loop#v(WAIT_COUNT - 1)
+;		DROP_CONTEXT; TODO: idler hints; for now assume idler changed BSR or WREG
+;	    endif
+;	    ifbit elapsed_fps, FALSE, goto wait_loop#v(WAIT_COUNT - 1); wait for timer roll-over
+;	    wait4_t1roll; wait for timer roll-over
+;ACCURACY = 1 KHz; break out of loop	    exitwhile
+;    if usec >= 256
+;	movlw ~(b'1111' << T0CKPS0) & 0xFF; prescaler bits
+;	BANKCHK T0CON1
+;	andwf T0CON1, F; strip temp prescaler
+;	iorwf T0CON1, T0_prescale << T0CKPS0; restore original 8:1 pre-scalar used for WS input timeout
+;    endif
+;    mov8 TMR0H, LITERAL(T0_ROLLOVER); restoreint takes 1 extra tick but this accounts for a few instr at start of ISR
+	    exitm
+	endif
+PRESCALER += 1
+;FREQ_FIXUP = IIF(FREQ_FIXUP == 31250, 16000, FREQ_FIXUP / 2);
+    endw
+;    error [ERROR] "fps_init" #v(interval_usec) "usec" (#v(USEC) tuned) unreachable with max "prescaler" #v(MAX_T0PRESCALER), using max interval #v(UNTUNED(LIMIT)) "usec" (#v(LIMIT) tuned) @__LINE__)
+    ERRIF(TRUE, [ERROR] "fps_init" #v(interval_usec) "usec" (#v(USEC) tuned) exceeds max reachable interval #v(UNTUNED(LIMIT)) "usec" (#v(LIMIT) tuned) @__LINE__)
+;    if usec <= 256
+;;	iorwf T0CON1, T0_prescale << T0CKPS0; restore original 8:1 pre-scalar used for WS input timeout
+;        mov8 T0CON1, LITERAL(MY_T0CON1(1 MHz));
+;        mov8 TMR0H, LITERAL(usec - 1);
+;    else
+;	if usec <= 1 M; 1 sec
+;            mov8 T0CON1, LITERAL(MY_T0CON1(250 Hz));
+;	    mov8 TMR0H, LITERAL((usec) / (1 KHz) - 1);
+;	else
+;	    if usec <= 256 K
+;		mov8 T0CON1, LITERAL(MY_T0CON1(1 KHz));
+;		mov8 TMR0H, LITERAL((usec) / (1 KHz) - 1);
+;	    else
+;	    endif
+;	endif
+;    endif
+;    EXPAND_POP
+    endm
+;    mov8 T0CON0, LITERAL(NOBIT(T0EN) | NOBIT(T016BIT) | T0_postscale << T0OUTPS0); Timer 0 disabled during config, 8 bit mode, 1:1 post-scalar
+;;    mov8 T0CON1, LITERAL(MY_T0CON1(MAX(FREQ_FIXUP, 1))); FREQ_FIXUP)); FOSC_FREQ / 4 / BIT(PRESCALER)));
+;    mov8 T0CON1, LITERAL(T0SRC_FOSC4 << T0CS0 | NOBIT(T0ASYNC) | MAX_T0PRESCALER << T0CKPS0); FOSC / 4, sync, pre-scalar TBD (1:1 for now)
+;    mov8 TMR0L, LITERAL(0); restart count-down with new limit
+;    mov8 TMR0H, LITERAL(ROLLOVER - 1); (usec) / (MAX_ACCURACY / ACCURACY) - 1);
+;    setbit T0CON0, T0EN, TRUE;
+;    setbit elapsed_fps, FALSE; clear previous overflow
+;init app counters:
+;    mov8 FPS, LITERAL(0)
+;    mov8 numfr, LITERAL(0)
+;    endm
+
+
+;wait for new frame:
+wait4frame macro idler, idler2
+;    EXPAND_PUSH FALSE
+; messg wait4frame: idler, idler2, #threads = #v(NUM_THREADS)
+;    ifbit elapsed_fps, FALSE, idler; bit !ready yet, let other threads run
+    idler; assume not ready yet, let other threads run
+    ifbit elapsed_fps, FALSE, idler2; more efficient than goto $-3 + call
+    setbit elapsed_fps, FALSE;
+;    EXPAND_POP
+    endm
+
+    EXPAND_POP
+    LIST_POP
+    messg end of hoist 3 @__LINE__
+;#else; too deep :(
+#endif
+#if HOIST == 2
+    messg hoist 2: cooperative multi-tasking ukernel @__LINE__
+    LIST_PUSH FALSE; don't show this section in .LST file
+    EXPAND_PUSH FALSE
+;; cooperative multi-tasking ukernel ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+#define HOST_STKLEN  16-0; total stack space available to threads; none left for host, threaded mode is one-way xition
+#define RERUN_THREADS  TRUE; true/false to re-run thread after return (uses 1 extra stack level); comment out ONLY if threads NEVER return!
+
+
+;NOTE: current (yield) addr uses 1 stack level
+#ifndef RERUN_THREADS
+ #define MIN_STACK  1; need 1 level for current exec addr within thread
+#else
+ #define MIN_STACK  2; need another level in case thread returns to wrapper
+#endif
+
+
+;encapsulate "call" vs "goto" for caller:
+;#define YIELD  call yield
+;#define YIELD_AGAIN  goto yield_again
+
+;dummy target until threads defined:
+;no_treads equ $; kludge: must be const rather than label for "yield" aliasing
+;yield_none: sleep
+;yield set yield_none
+;yield_again set yield_none
+;stkptr_#v(0) SET STKPTR; dummy def if no threads defined; threads will redefine
+;!worky #define YIELD  yield_generic
+;use generic versions outside of thread def:
+;YIELD set yield
+;YIELD_AGAIN set yield_again
+
+
+;    nbDCL stkptr_2,
+;    messg TODO: ^^^ fix this @__LINE__
+;define new thread:
+;starts executing when yield is called
+    VARIABLE STK_ALLOC = 0; total stack alloc to threads
+    VARIABLE NUM_THREADS = 0;
+    VARIABLE IN_THREAD = 0;
+THREAD_DEF macro thread_body, stacksize
+;    EXPAND_PUSH FALSE;
+    ERRIF(IN_THREAD, [ERROR] missing END_THREAD from previous thread #v(NUM_THREADS - 1) @__LINE__);
+;    END_THREAD; #undef aliases for prev thread
+    ERRIF(stacksize < MIN_STACK, [ERROR] thread_body stack size #v(stacksize)"," needs to be >= #v(MIN_STACK) @__LINE__);
+    ERRIF(stacksize > HOST_STKLEN - STK_ALLOC, [ERROR] thread_body stack size #v(stacksize) exceeds available #v(HOST_STKLEN - STK_ALLOC)"," thread cannot be created @__LINE__)
+;    ERRIF((NUM_THREADS << 4) & ~0x7F, [ERROR] too many threads already: #v(NUM_THREADS), PCLATH !enough bits @__LINE__); stack is only 15 bits wide
+;    LOCAL thread_body;
+;statically assign resources to threads:
+;gives more efficient code and handles yields to unstarted threads
+;threads are assumed to run forever so resources are never deallocated
+    nbDCL stkptr_#v(NUM_THREADS),; each thread gets its own section of stack space + saved STKPTR
+STK_ALLOC += stacksize
+    messg creating thread_body thread# #v(NUM_THREADS) @#v($), stack size #v(stacksize), host stack remaining: #v(HOST_STKLEN - STK_ALLOC) @__LINE__
+;stkptr_#v(0) SET stkptr_#v(NUM_THREADS + 1); wrap-around for round robin yield; NOTE: latest thread overwrites this
+;cooperative multi-tasking:
+;6-instr context switch: 3 now (call + sv STKPTR) + 3 later (rest STKPTR + return)
+;    if NUM_THREADS > 0; one back to avoid undefs
+;#undefine YIELD
+;#define YIELD  call yield_from_#v(NUM_THREADS); alias for caller
+;YIELD set yield_from_#v(NUM_THREADS); alias for caller
+;#define yield  yield_from_#v(NUM_THREADS); alias for caller
+yield_from_#v(NUM_THREADS): DROP_CONTEXT; overhead for first yield = 10 instr = 1.25 usec @8 MIPS
+    mov8 stkptr_#v(NUM_THREADS), STKPTR; #v(curthread)
+;yield_from_#v(NUM_THREADS)_placeholder set $
+yield_again_#v(NUM_THREADS): DROP_CONTEXT; overhead for repeating yield = 7 instr < 1 usec @8 MIPS
+    CONTEXT_SAVE yield_placeholder_#v(NUM_THREADS)
+    ORG $ + 2+1; placeholder for: mov8 STKPTR, stkptr_#v(NUM_THREADS + 1); % MAX_THREADS); #v(curthread + 1); round robin
+    EMIT return;
+yield set yield_from_#v(NUM_THREADS); alias for caller
+#define YIELD  CALL yield
+yield_again set yield_again_#v(NUM_THREADS); alias for caller
+#define YIELD_AGAIN  GOTO yield_again
+;yield_from_#v(thread_body) EQU yield_from_#v(NUM_THREADS); allow yield by thread name
+;#define YIELD_AGAIN  goto yield_again_#v(NUM_THREADS); alias for caller
+;YIELD_AGAIN set yield_again_#v(NUM_THREADS); alias for caller
+;#define yield_again  yield_again_#v(NUM_THREADS); alias for caller
+;yield_again_#v(NUM_THREADS): DROP_CONTEXT;
+;    BANKCHK STKPTR;
+;    BANKSAFE dest_arg(W) incf STKPTR;, W; ret addr !change: replaces goto + call, saves 3 instr
+;    BANKSAFE dest_arg(F) incf stkptr_#v(NUM_THREADS);, F;
+;no! already correct    INCF stkptr_#v(NUM_THREADS), F;
+;yield_again_#v(NUM_THREADS)_placeholder set $
+;    CONTEXT_SAVE yield_again_placeholder_#v(NUM_THREADS)
+;    ORG $ + 2+1; placeholder for: mov8 STKPTR, stkptr_#v(NUM_THREADS + 1); % MAX_THREADS); #v(curthread + 1); round robin
+;    EMIT return;
+;yield_again set yield_again_#v(NUM_THREADS); alias for caller
+;#define YIELD_AGAIN  GOTO yield_again
+;yield SET yield_from_#v(NUM_THREADS); alias for caller
+;yield_again SET yield_again_#v(NUM_THREADS); alias for caller
+;thread_body: DROP_CONTEXT;
+;start_thread_#v(0) EQU yield
+;define thread entry point:
+    init_more TRUE;
+#ifdef RERUN_THREADS
+;    CALL (NUM_THREADS << (4+8)) | thread_wrapper_#v(NUM_THREADS)); set active thread# + statup addr
+    CALL stack_alloc_#v(NUM_THREADS); kludge: put thread_wrapper ret addr onto stack; doesn't return until yield
+thread_wrapper_#v(NUM_THREADS): DROP_CONTEXT;
+    CALL thread_body; start executing thread; allows thread to return but uses extra stack level
+#if !RERUN_THREADS
+    YIELD; call yield_from_#v(NUM_THREADS) ;bypass dead (returned) threads in round robin yields
+#endif
+    GOTO $-1; re-run thread or just yield to other threads
+#else
+    messg TODO: put CALL stack_alloc < thread_body
+thread_wrapper_#v(NUM_THREADS) EQU thread_body; onthread(NUM_THREADS, thread_body); begin executing thread; doesn't use any stack but thread can never return!
+;    goto thread_body; begin executing thread; doesn't use any stack but thread can never return!
+#endif
+;alloc + stack + set initial addr:
+;NOTE: thread doesn't start execeuting until all threads are defined (to allow yield to auto-start threads)
+;CAUTION: execution is multi-threaded after this; host stack is taken over by threads; host stack depth !matter because will never return to single-threaded mode
+;create_thread_#v(NUM_THREADS): DROP_CONTEXT;
+;create thread but allow more init:
+;    init_more TRUE;
+;    EMIT goto init_#v(INIT_COUNT + 1); daisy chain: create next thread; CAUTION: use goto - change STKPTR here
+;    mov8 PCLATH, LITERAL(NUM_THREADS << 4); set active thread#; will be saved/restored by yield
+;    movlp NUM_THREADS << 4; set active thread#; will be saved/restored by yield_#v(); used by generic yield() to select active thread
+;    movlw 0x0F
+;    andwf PCLATH, F; drop current thread#, preserve current code page bits
+;    movlw #v(NUM_THREADS) << 4;
+;    iorwf PCLATH, F; set new thread#
+;    setbit PCLATH, 12-8, NUM_THREADS & BIT(0);
+;    mov16 TOS, LITERAL(NUM_THREADS << (4+8) | thread_wrapper_#v(NUM_THREADS)); thread statup addr
+;kludge: put thread# in PCH msb; each thread runs on its own code page, but code can be shared between threads with virtual auto-thunks
+;    PUSH LITERAL(NUM_THREADS << (4+8) | thread_wrapper_#v(NUM_THREADS)); set active thread# + statup addr
+stack_alloc_#v(NUM_THREADS): DROP_CONTEXT;
+    mov8 stkptr_#v(NUM_THREADS), STKPTR;
+;    REPEAT LITERAL(stacksize), PUSH thread_exec_#v(NUM_THREADS);
+;    mov16 TOS, LITERAL(NUM_THREADS << 12 | thread_body); start_#v(NUM_THREADS)); set initial execution point in case another thread yields before this thread starts; thread exec could be delayed by using yield_#v() here
+;    BANKCHK STKPTR;
+    if (stacksize) <= 3
+;	BANKSAFE dest_arg(F) incf STKPTR;, F;
+;	INCF STKPTR, F;
+        REPEAT LITERAL(stacksize - 1), dest_arg(F) INCF STKPTR; alloc requested space (1 level used by thread wrapper)
+    else
+        MOVLW stacksize - 1; stack level used for initial addr
+;	BANKSAFE dest_arg(F) addwf STKPTR;, F; alloc stack space to thread
+	ADDWF STKPTR, F; alloc stack space to thread
+    endif
+;    goto create_thread_#v(NUM_THREADS - 1); daisy-chain: create previous thread; CAUTION: use goto - don't want to change STKPTR here!
+    init_more FALSE;
+;    messg "YIELD = " YIELD @__LINE__
+NUM_THREADS += 1; do this at start so it will remain validate within thread body; use non-0 for easier PCLATH debug; "thread 0" == prior to thread xition
+;    messg "YIELD = " YIELD @__LINE__
+IN_THREAD = NUM_THREADS;
+;    EXPAND_POP
+    endm
+
+THREAD_END macro
+;    EXPAND_PUSH FALSE
+    ERRIF(!IN_THREAD, [ERROR] no thread"," last used was #v(NUM_THREADS) @__LINE__);
+IN_THREAD = FALSE;
+;use generic versions outside of thread def:
+;YIELD set yield
+;YIELD_AGAIN set yield_again
+;#undefine yield
+;#undefine yield_again
+;yield set yield_generic
+;yield_again set yield_again_generic
+#undefine YIELD
+#undefine YIELD_AGAIN
+;    EXPAND_POP
+    endm
+
+
+;create + execute threads:
+;once threads are created, execution jumps to ukernel (via first thread) and never returns
+;cre_threads macro
+;init_#v(INIT_COUNT): DROP_CONTEXT; macro
+;first set up thread stacks + exec addr:
+;    LOCAL thr = #v(NUM_THREADS);
+;    while thr > 0
+;	call create_thread_#v(thr); NOTE: stack alloc + set initial addr; thread doesn't start until yielded to
+;thr -= 1
+;    endw
+;    call create_thread_#v(NUM_THREADS); create all threads (daisy chained)
+;    WARNIF(!NUM_THREADS, [ERROR] no threads to create, going to sleep @__LINE__);
+;    sleep
+;start executing first thread; other threads will start as yielded to
+;CAUTION: never returns
+;create_thread_#v(0): DROP_CONTEXT;
+;    mov8 STKPTR, stkptr_#v(NUM_THREADS); % MAX_THREADS); #v(curthread + 1); round robin
+;    return;
+;    ENDM
+;INIT_COUNT = -1; += 999; no more init code after multi-threaded ukernel starts
+    
+
+;resume_thread macro thrnum
+;    mov8 STKPTR, stkptr_#v(thrnum); % MAX_THREADS); #v(curthread + 1); round robin
+;    return;
+;    endm
+    
+;yield_until macro reg, bitnum, bitval
+;    ifbit reg, bitnum, bitval, resume_thread
+;    mov8 stkptr_#v(NUM_THREADS), STKPTR; #v(curthread)
+;    mov8 STKPTR, stkptr_#v(NUM_THREADS + 1); % MAX_THREADS); #v(curthread + 1); round robin
+;    endm
+
+;yield_delay macro usec_delay
+;    endm
+
+
+eof_#v(EOF_COUNT) macro
+;    EXPAND_PUSH FALSE
+    messg [INFO] #threads: #v(NUM_THREADS), stack space needed: #v(STK_ALLOC), unalloc: #v(HOST_STKLEN - STK_ALLOC) @__LINE__
+;optimize special cases:
+;    if NUM_THREADS == 1
+;	messg TODO: bypass yield (only 1 thread) @__LINE__
+;    endif
+;    if NUM_THREADS == 2
+;	messg TODO: swap stkptr_#v() (only 2 threads) @__LINE__
+;    endif
+;start executing first thread; other threads will start as yielded to
+;CAUTION: never returns
+    if NUM_THREADS
+;stkptr_#v(NUM_THREADS) SET stkptr_#v(0); wrap-around for round robin yield; NOTE: latest thread overwrites this
+	EMITL start_threads:; only used for debug
+	mov8 STKPTR, stkptr_#v(0); NUM_THREADS); % MAX_THREADS); #v(curthread + 1); round robin
+	EMIT return;
+    endif
+;unneeded? generic yield:
+;allows code sharing between threads, but adds extra run-time overhead (6 instr cycle per yield)
+;caller can also use yield_from_#v() directly if target thread is constant (reduces overhead)
+;    nbDCL curthread,; need to track which thread is executing
+;kludge: use 4 msb of PCH to track which thread is running; 4 lsb can be involved with addressing
+;CAUTION: this requires *all* shared and thread-specific code to run in a separate code page
+; this allows code to be shared between threads but only works when code addresses wrap to existing prog space
+;    EMITL yield_generic: DROP_CONTEXT;
+;    BANKCHK TOSH;
+;    BANKSAFE dest_arg(W) swapf TOSH;, W; PCLATH might have changed, TOSH gives true PC
+;    EMIT andlw 0x0F; strip off 4 lsb (swapped), leaving thread#; NOTE: PC is 15 bits so only 8 thread pages are possible
+;    EMIT brw
+    LOCAL yield_thread = 0, here
+;    LOCAL save_place = $, save_wreg = WREG_TRACKER, save_bank = BANK_TRACKER
+    CONTEXT_SAVE before_yield
+    while yield_thread < NUM_THREADS
+;	EMIT goto yield_from_#v(yield_thread); NOTE: 4 msb PCLATH will be set within yield_#v()
+;go back and fill in placeholders now that we know which thread# will wrap back to 0:
+;save_place = $
+;BANK_TRACKER = STKPTR; BSR was set < placeholder
+;	DROP_WREG;
+;	ORG yield_from_#v(yield_thread)_placeholder
+        CONTEXT_RESTORE yield_placeholder_#v(yield_thread)
+here = $	
+	mov8 STKPTR, stkptr_#v((yield_thread + 1) % NUM_THREADS); round robin wraps around
+	if $ < here + 2+1
+	    EMIT return; return early if banksel !needed; more efficient than nop
+	endif
+;	DROP_WREG;
+;	ORG yield_again_#v(yield_thread)_placeholder
+;        CONTEXT_RESTORE yield_again_placeholder_#v(yield_thread)
+;here = $	
+;	mov8 STKPTR, stkptr_#v((yield_thread + 1) % NUM_THREADS); round robin wraps around
+;	if $ < here + 3
+;	    EMIT return; fill space reserve for banksel; return rather than nop
+;	endif
+;	ORG save_place
+yield_thread += 1
+    endw
+;    ORG save_place
+;WREG_TRACKER = save_wreg
+;BANK_TRACKER = save_bank
+    CONTEXT_RESTORE before_yield
+;    while yield_thread < 16
+;	EMIT sleep; pad out jump table in case of unknown thread
+;yield_thread += 1
+;    endw
+;generic yield_again:
+;    EMITL yield_again_generic: DROP_CONTEXT;
+;    BANKCHK TOSH;
+;    BANKSAFE dest_arg(W) swapf TOSH;, W; PCLATH might have changed, TOSH gives true PC
+;    EMIT andlw 0x0F; strip off 4 lsb (swapped), leaving thread#; NOTE: PC is 15 bits so only 8 thread pages are possible
+;    EMIT brw
+;    while yield_thread < 16 + NUM_THREADS
+;	EMIT goto yield_again_#v(yield_thread % NUM_THREADS); NOTE: 4 msb PCLATH will be set within yield_#v()
+;yield_thread += 1
+;    endw
+;    while yield_thread < 16 + 16
+;	EMIT sleep; pad out jump table in case of unknown thread
+;yield_thread += 1
+;    endw
+;    EXPAND_POP
+    endm
+EOF_COUNT += 1;
+
+
+;; config/init ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;peripherals used as follows:
+;- Timer 0 generates interrupt for next frame after 50 usec WS idle time or for animation (while interrupts off)
+;- Timer 1 gate mode measures WS input pulse width for decoding first WS input pixel or just counting ws bytes thereafter
+;- Timer 2 used as elapsed time for FPS tracking
+;- EUSART used to generate WS breakout stream
+;- CLC1-3 redirects WS input to other pins (segments)
+
+
+;disable unused peripherals:
+;saves a little power, helps prevent accidental interactions
+#define ENABLED(n)  NOBIT(n); all peripherals are ON by default
+#define DISABLED(n)  BIT(n)
+#define ENABLED_ALL  0
+#define DISABLED_ALL  0xFF
+pmd_init macro
+;?    mov8 ODCONA, LITERAL(0); //all push-pull out (default), no open drain
+;?    mov8 SLRCONA, LITERAL(~BIT(RA3)); //0x37); //limit slew rate, all output pins 25 ns vs 5 ns
+;?    mov8 INLVLA, LITERAL(~BIT(RA3)); //0x3F); //TTL input levels on all input pins
+;??    mov8 RA4PPS, LITERAL(0x01);   ;RA4->CLC1:CLC1OUT;    
+;??    mov8 RA5PPS, LITERAL(0x01);   ;RA5->CLC1:CLC1OUT;    
+;??    mov8 RA1PPS, LITERAL(0x01);   ;RA1->CLC1:CLC1OUT;    
+;??    mov8 RA2PPS, LITERAL(0x01);   ;RA2->CLC1:CLC1OUT;    
+;??    mov8 RA0PPS, LITERAL(0x16);   ;RA0->MSSP1:SDO1;    
+;    setbit PMD0, FVRMD, DISABLED;
+;    setbit PMD0, NVMMD, DISABLED;
+;    setbit PMD0, CLKRMD, DISABLED;
+;    setbit PMD0, IOCMD, DISABLED;
+    mov8 PMD0, LITERAL(DISABLED_ALL ^ DISABLED(SYSCMD)); ENABLED(SYSCMD) | DISABLED(FVRMD) | DISABLED(NVMMD) | DISABLED(CLKRMD) | DISABLED(IOCMD)); keep sys clock, disable FVR, NVM, CLKR, IOC
+;    setbit PMD1, NCOMD, DISABLED;
+    mov8 PMD1, LITERAL(DISABLED_ALL ^ DISABLED(TMR2MD) ^ DISABLED(TMR1MD) ^ DISABLED(TMR0MD)); DISABLED(NCOMD) | ENABLED(TMR2MD) | ENABLED(TMR1MD) | ENABLED(TMR0MD)); disable NCO, enabled Timer 0 - 2
+;    setbit PMD2, DAC1MD, DISABLED;
+;    setbit PMD2, ADCMD, DISABLED;
+;    setbit PMD2, CMP1MD, DISABLED;
+;    setbit PMD2, ZCDMD, DISABLED;
+    mov8 PMD2, LITERAL(DISABLED_ALL); DISABLED(DAC1MD) | DISABLED(ADCMD) | DISABLED(CMP1MD) | DISABLED(ZCDMD)); disable DAC1, ADC, CMP1, ZCD
+;    setbit PMD3, PWM6MD, DISABLED;
+;    setbit PMD3, PWM5MD, DISABLED;
+;    setbit PMD3, PWM4MD, DISABLED;
+;    setbit PMD3, CCP2MD, DISABLED;
+;    setbit PMD3, CCP1MD, DISABLED;
+    mov8 PMD3, LITERAL(DISABLED_ALL); ^ DISABLED(CCP1MD)); DISABLED(PWM6MD) | DISABLED(PWM5MD) | DISABLED(PWM4MD) | ENABLED(PWM3MD) | DISABLED(CCP2MD) | DISABLED(CCP1MD)); enable PWM 3, disable PWM 4 - 6, CCP 1 - 2
+;    setbit PMD4, UART1MD, DISABLED;
+;    setbit PMD4, CWG1MD, DISABLED;
+    mov8 PMD4, LITERAL(DISABLED_ALL ^ DISABLED(UART1MD)); ENABLED(UART1MD) | DISABLED(MSSP1MD) | DISABLED(CWG1MD)); disable EUSART1, CWG1, enable MSSP1
+;    setbit PMD5, CLC4MD, DISABLED; IIFDEBUG(ENABLED, DISABLED);
+;    setbit PMD5, CLC3MD, DISABLED;
+;    mov8 PMD5, LITERAL(DISABLED(CLC4MD) | DISABLED(CLC3MD) | ENABLED(CLC2MD) | ENABLED(CLC1MD)); disable CLC 3, 4, enable CLC 1, 2
+    mov8 PMD5, LITERAL(ENABLED_ALL); DISABLED_ALL ^ DISABLED(CLC#v(WSPASS)MD) ^ DISABLED(CLC#v(WSDO)MD)); ENABLED(CLC4MD) | ENABLED(CLC3MD) | ENABLED(CLC2MD) | ENABLED(CLC1MD)); disable CLC 3, 4, enable CLC 1, 2
+    endm
+
+
+;NOTE: default is unlocked
+pps_lock macro want_lock
+;requires next 5 instructions in sequence:
+    mov8 PPSLOCK, LITERAL(0x55);
+    mov8 PPSLOCK, LITERAL(0xAA);
+;    mov8 PPSLOCK, LITERAL(0); allow CLC1 output to be redirected to RA1/2/5/4
+    setbit PPSLOCK, PPSLOCKED, want_lock; allow output pins to be reassigned
+    endm
+
+
+;initialize I/O pins:
+;NOTE: RX/TX must be set for Input when EUSART is synchronous, however UESART controls this?
+;#define NO_PPS  0
+;#define INPUT_PINS  (BIT(WSDI) | BIT(RA#v(BREAKOUT))); //0x00); //all pins are output but datasheet says to set TRIS for peripheral pins; that is just to turn off general-purpose output drivers
+iopin_init macro
+    mov8 ANSELA, LITERAL(0); //all digital; CAUTION: do this before pin I/O
+    mov8 WPUA, LITERAL(BIT(WSDI)); INPUT_PINS); //weak pull-up on input pins in case not connected (ignored if MCLRE configured)
+#if 0
+    messg are these needed? @__LINE__
+    mov8 ODCONA, LITERAL(0); push-pull outputs
+    mov8 INLVLA, LITERAL(~0 & 0xff); shmitt trigger input levels;  = 0x3F;
+    mov8 SLRCONA, LITERAL(~BIT(RA#v(WSDI)) & 0xff); on = 25 nsec slew, off = 5 nsec slew; = 0x37;
+#endif
+    mov8 LATA, LITERAL(0); //start low to prevent junk on line
+    mov8 TRISA, LITERAL(BIT(WSDI)); | BIT(RA#v(BREAKOUT))); INPUT_PINS); //0x00); //all pins are output but datasheet says to set TRIS for peripheral pins; that is just to turn off general-purpose output drivers
+;?    REPEAT LITERAL(RA5 - RA0 + 1), mov8 RA0PPS + repeater, LITERAL(NO_PPS); reset to LATA; is this needed? (datasheet says undefined at startup)
+    endm
+
+
+;    LIST
+;    LIST_PUSH TRUE
+;HFFRQ values:
+;(these should be in p16f15313.inc)
+    CONSTANT HFFRQ_#v(32 MHz) = b'110'
+    CONSTANT HFFRQ_#v(16 MHz) = b'101'
+    CONSTANT HFFRQ_#v(12 MHz) = b'100'
+    CONSTANT HFFRQ_#v(8 MHz) = b'011'
+    CONSTANT HFFRQ_#v(4 MHz) = b'010'
+    CONSTANT HFFRQ_#v(2 MHz) = b'001'
+    CONSTANT HFFRQ_#v(1 MHz) = b'000'
+;    LIST_POP; pop
+;    NOLIST
+
+;set int osc freq:
+;    CONSTANT CLKDIV = (FOSC_CFG / PWM_FREQ); CLK_FREQ / HFINTOSC_FREQ);
+;#define HFINTOSC_NOSC  b'110' ;use OSCFRQ; 0; no change (use cfg); should be in p16f15313.inc
+#define USE_HFFRQ  b'110'; should be in p16f15313.inc
+;#define PWM_FREQ  (16 MHz); (FOSC_CFG / 2); need PWM freq 16 MHz because max speed is Timer2 / 2 and Timer2 max speed is FOSC/4
+;#define FOSC_FREQ  PWM_FREQ; FOSC needs to run at least as fast as needed by PWM
+;#define FOSC_FREQ  (32 MHz); (16 MHz); nope-FOSC needs to be a multiple of WS half-bit time; use 4 MIPS to allow bit-banging (DEBUG ONLY)
+;    CONSTANT MY_OSCCON = USE_HFFRQ << NOSC0 | 0 << NDIV0; (log2(CLKDIV) << NDIV0 | HFINTOSC_NOSC << NOSC0);
+;    messg [INFO] FOSC #v(FOSC_CFG), PWM freq #v(PWM_FREQ) @__LINE__;, CLK DIV #v(CLKDIV) => my OSCCON #v(MY_OSCCON)
+;    messg [INFO], Fosc #v(FOSC_FREQ) == 4 MIPS? #v(FOSC_FREQ == 4 MIPS), WS bit freq #v(WSBIT_FREQ), #instr/wsbit #v(FOSC_FREQ/4 / WSBIT_FREQ) @__LINE__
+fosc_init macro
+;    mov8 OSCCON1, LITERAL(b'110' << NOSC0 | b'0000' << NDIV0
+;RSTOSC in CONFIG1 tells HFFRQ to default to 32 MHz, use 2:1 div for 16 MHz:
+    setbit OSCCON3, CSWHOLD, FALSE; use new clock as soon as stable (should be immediate if HFFRQ !changed)
+    mov8 OSCCON1, LITERAL(USE_HFFRQ << NOSC0 | 0 << NDIV0); MY_OSCCON); 1:1
+    mov8 OSCFRQ, LITERAL(HFFRQ_#v(FOSC_FREQ));
+;    ERRIF CLK_FREQ != 32 MHz, [ERROR] need to set OSCCON1, clk freq #v(CLK_FREQ) != 32 MHz
+;CAUTION: assume osc freq !change, just divider, so new oscillator is ready immediately
+;;    ifbit PIR1, CSWIF, FALSE, goto $-1; wait for clock switch to complete
+;    ifbit OSCCON3, ORDY, FALSE, goto $-1; wait for clock switch to complete
+    endm
+
+
+;general I/O initialization:
+    init_more TRUE
+    EXPAND_PUSH TRUE
+    iopin_init;
+    fosc_init;
+    pmd_init; turn off unused peripherals
+    EXPAND_POP
+;NOPE: PPS assigned during brkout_render    pps_lock TRUE; prevent pin reassignments; default is unlocked
+    init_more FALSE
+
+
+;; config ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ; Configuration bits: selected in the GUI (MCC)
 ;#if EXT_CLK_FREQ  ;ext clock might be present
@@ -270,6 +1597,7 @@ asmbit += 1
 ;MY_CONFIG &= _WDT_ON  ;use WDT to restart if software crashes (paranoid); WDT has 8-bit pre- (shared) and 16-bit post-scalars (page 125)
 ;	__config MY_CONFIG
 
+    LIST_PUSH FALSE
     VARIABLE MY_CONFIG1 = -1  ;start with all Oscillator bits on, then EXPLICITLY turn them off below
 MY_CONFIG1 &= _FCMEN_OFF  ; Fail-Safe Clock Monitor Enable bit->FSCM timer disabled
 MY_CONFIG1 &= _CSWEN_OFF ;unneeded    ; Clock Switch Enable bit->Writing to NOSC and NDIV is allowed
@@ -282,12 +1610,12 @@ MY_CONFIG1 &= _CLKOUTEN_OFF  ; Clock Out Enable bit->CLKOUT function is disabled
 MY_CONFIG1 &= _RSTOSC_HFINT32 ;HFINTOSC with OSCFRQ= 32 MHz and CDIV = 1:1
 ;#endif
 ;MY_CONFIG1 &= _RSTOSC_HFINT1  ;Power-up default value for COSC bits->HFINTOSC (1MHz)
-    messg [TODO] use RSTOSC HFINT 1MHz?
+    messg [TODO] use RSTOSC HFINT 1MHz? @__LINE__
 ;#define OSCFRQ_CFG  (16 MHz)
 ;#define FOSC_CFG  (32 MHz) ;(16 MHz PLL) ;(OSCFRQ_CFG PLL); HFINTOSC freq 16 MHz with 2x PLL and 1:1 div gives 32 MHz (8 MIPS)
 MY_CONFIG1 &= _FEXTOSC_OFF  ;External Oscillator mode selection bits->Oscillator not enabled
     VARIABLE MY_CONFIG2 = -1  ;start with all Supervisor bits on, then EXPLICITLY turn them off below
-MY_CONFIG2 &= _STVREN_ON  ; Stack Overflow/Underflow Reset Enable bit->Stack Overflow or Underflow will cause a reset
+MY_CONFIG2 &= _STVREN_OFF  ; allow wrap: xition to threaded mode can happen from any stack depth; Stack Overflow/Underflow Reset Enable bit->Stack Overflow or Underflow will cause a reset
 MY_CONFIG2 &= _PPS1WAY_ON ; Peripheral Pin Select one-way control->The PPSLOCK bit can be cleared and set only once in software
 MY_CONFIG2 &= _ZCD_OFF   ; Zero-cross detect disable->Zero-cross detect circuit is disabled at POR.
 MY_CONFIG2 &= _BORV_LO   ; Brown-out Reset Voltage Selection->Brown-out Reset Voltage (VBOR) set to 1.9V on LF, and 2.45V on F Devices
@@ -301,7 +1629,7 @@ MY_CONFIG3 &= _WDTE_OFF  ; WDT operating mode->WDT Disabled, SWDTEN is ignored
 ; config WDTCWS = WDTCWS_7    ; WDT Window Select bits->window always open (100%); software control; keyed access not required
 ; config WDTCCS = SC    ; WDT input clock selector->Software Control
     VARIABLE MY_CONFIG4 = -1  ;start with all Memory bits on, then EXPLICITLY turn them off below
-    MESSG [TODO] boot loader?
+    MESSG [TODO] boot loader + LVP? @__LINE__
 MY_CONFIG4 &= _LVP_OFF ;ON?  ; Low Voltage Programming Enable bit->High Voltage on MCLR/Vpp must be used for programming
 MY_CONFIG4 &= _WRTSAF_OFF  ; Storage Area Flash Write Protection bit->SAF not write protected
 MY_CONFIG4 &= _WRTC_OFF  ; Configuration Register Write Protection bit->Configuration Register not write protected
@@ -312,13 +1640,13 @@ MY_CONFIG4 &= _BBEN_OFF  ; Boot Block Enable bit->Boot Block disabled
 MY_CONFIG4 &= _BBSIZE_BB512  ; Boot Block Size Selection bits->512 words boot block size
     VARIABLE MY_CONFIG5 = -1  ;start with all Code Protection bits on, then EXPLICITLY turn them off below
 MY_CONFIG5 &= _CP_OFF  ; UserNVM Program memory code protection bit->UserNVM code protection disabled
-    LIST
+    LIST_PUSH TRUE
     __config _CONFIG1, MY_CONFIG1
     __config _CONFIG2, MY_CONFIG2
     __config _CONFIG3, MY_CONFIG3
     __config _CONFIG4, MY_CONFIG4
     __config _CONFIG5, MY_CONFIG5
-    NOLIST
+    LIST_POP; pop
 ;config
 ; config FOSC = HS        ; Oscillator Selection bits (HS oscillator)
 ; config WDTE = OFF       ; Watchdog Timer Enable bit (WDT disabled)
@@ -328,195 +1656,254 @@ MY_CONFIG5 &= _CP_OFF  ; UserNVM Program memory code protection bit->UserNVM cod
 ; config CPD = OFF        ; Data EEPROM Memory Code Protection bit (Data EEPROM code protection off)
 ; config WRT = OFF        ; Flash Program Memory Write Enable bits (Write protection off; all program memory may be written to by EECON control)
 ; config CP = OFF         ; Flash Program Memory Code Protection bit (Code protection off)
+    LIST_POP; pop
+
+    EXPAND_POP
+    LIST_POP
+    messg end of hoist 2 @__LINE__
+;#else; too deep :(
+#endif
+#if HOIST == 1
+    messg hoist 1: custom opc @__LINE__
+    LIST_PUSH FALSE; don't show this section in .LST file
+    EXPAND_PUSH FALSE
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+#ifdef WANT_DEBUG
+ #define IIFDEBUG(expr_true, ignored)  expr_true
+#else
+ #define IIFDEBUG(ignored, expr_false)  expr_false
+#endif
+;#ifdef WANT_DEBUG
+; #define NOLIST  LIST; leave it all on
+;    messg [INFO] COMPILED FOR DEV/DEBUG! @__LINE__
+;#endif
+    WARNIF(IIFDEBUG(TRUE, FALSE), [INFO] COMPILED FOR DEV/DEBUG! @__LINE__);
+
+    
+    LIST n = 60, c = 200, t = on, n = 0  ;line (page) size, column size, truncate, no paging
+;	LIST r=hex  ;radix; NOTE: this affects interpretation of literals, as well as output listing; ALWAYS use D'' with literals > 8
+    LIST R = DEC
+    LIST mm = on  ;memory map
+    LIST st = on  ;symbol table
+;    PAGEWIDTH   132
+;    RADIX       DEC
+
+#ifdef __16F15313
+    LIST p = 16F15313
+    PROCESSOR 16F15313  ;688 ;16F877A
+#define LIST; disable within .inc
+#define NOLIST; disable within .inc
+;#include "P16F15313.INC"
+ #include <p16f15313.inc>
+#undefine NOLIST; re-enable
+#undefine LIST; re-enable
+#else
+    error [ERROR] Unsupported device @__LINE__; add others as support added
+#endif
+;pic-as not mpasm: #include <xc.inc>
 
 
-;macros to control expansion of other macros:
-;this allows some clutter to be removed from the .LST file
-;use this if more than 32 levels needed:
-;    VARIABLE MEXPAND_STACKLO = 1, MEXPAND_STACKHI = 0  ;default is ON (for caller, set at eof in this file)
-;    VARIABLE MEXPAND_STACK = 1  ;default is ON (for caller, set at eof in this file)
-    VARIABLE MEXPAND_DEPTH = 0, MEXPAND_DEEPEST = 0
-;push current macro expand directive, then set new one (max 31 nested levels):
-;params:
-; onoff = whether to turn macro expansion on or off
-EXPAND_PUSH MACRO onoff
-    NOEXPAND  ;first turn it off to hide clutter in here
-    ERRIF MEXPAND_STACK & ASM_MSB, [ERROR] macro expand stack too deep: #v(MEXPAND_DEPTH),
-    NOEXPAND  ;hide clutter in here
-MEXPAND_STACK *= 2  ;push current value (shift left)
-MEXPAND_STACK += BOOL2INT(onoff)
-;	if MEXPAND_DEPTH > MEXPAND_DEEPEST
-;MEXPAND_DEEPEST = MEXPAND_DEPTH  ;keep track of high-water mark
-;	endif
-MEXPAND_DEPTH += 1  ;keep track of current nesting level
-MEXPAND_DEEPEST = MAX(MEXPAND_DEEPEST, MEXPAND_DEPTH) ;keep track of high-water mark
-;use this if more than 32 levels needed:
-;MEXPAND_STACKHI *= 2
-;	if MEXPAND_STACKLO & ASM_MSB
-;MEXPAND_STACKHI += 1
-;MEXPAND_STACKLO &= ~ASM_MSB
-;	endif
-;    if !(onoff) ;leave it off
-;    if !(MEXPAND_STACK & 1) ;leave it off
-;	EXITM
-;    endif
-;    EXPAND  ;turn listing on
-    EXPAND_RESTORE
-    ENDM
+;clock macros:
+#define mhz(freq)  rdiv(freq, 1000000)
+#define khz(freq)  rdiv(freq, 1000)
+#define prescaler(base_freq, want_freq)  log2((base_freq) / (want_freq))
+;CAUTION: avoid arith overflow:
+;#define scale(freq, prescaler)  ((freq) / BIT(prescaler))
+#define scale(freq, prescale)  (BIT(prescale) KHz / khz(freq)); split 1M factor to avoid arith overflow; BIT(PRESCALER - 3); usec
+;#define prescfreq(prescaler)  (FOSC_FREQ / 4 / BIT(prescaler));
+;readabililty macros:
+;CAUTION: use with "()"
+#define MHz  * 1000000
+#define KHz  * 1000
+;#define Hz  * 1
+#define usec  * 1
+#define msec  * 1000
+#define sec  * 1000000
+#define PLL  * 2; PLL on int osc is 2, ext clk is 4
+#define MIPS  * 4 MHz ;4 clock cycles per instr
 
 
-;restore previous macro expand directive:
-;params:
-; dummy = dummy parameter (needed in order to force MPASM to allow optional params for this macro)
-; expected_nesting = expected nesting level after pop (optional); must have a trailing "&" if passed
-EXPAND_POP MACRO ;dummy ;, nesting
-    NOEXPAND  ;first turn it off to hide clutter in here
-;    LOCAL EXP_NEST = nesting -1  ;optional param; defaults to -1 if not passed
-MEXPAND_STACK /= 2  ;pop previous value (shift right)
-MEXPAND_DEPTH -= 1  ;keep track of current nesting level
-;only needed if reach 16 levels:
-;	if MEXPAND_STACKLO & ASM_MSB  ;< 0
-;MEXPAND_STACKLO &= ~ASM_MSB  ;1-MEXPAND_STACKLO  ;make correction for assembler sign-extend
-;	endif
-;use this if more than 32 levels needed:
-;	if MEXPAND_STACKHI & 1
-;MEXPAND_STACKLO += ASM_MSB
-;	endif
-;MEXPAND_STACKHI /= 2
-;errif does this:
-;	if !(MEXPAND_STACKLO & 1)  ;pop, leave off
-;		EXITM
-;	endif
-    ERRIF MEXPAND_DEPTH < 0, [ERROR] macro expand stack underflow,
-;    EXPAND  ;listing back on again
-;    ERRIF (EXP_NEST != -1) && (MEXPAND_DEPTH != EXP_NEST), [ERROR] Mismatched macro expanders: nesting is #v(MEXPAND_DEPTH) but should be #v(EXP_NEST)
-    ENDM
+;* lookup tables (faster than computing as needed) ************************************
 
-
-;repeat a statement the specified number of times:
-;stmt can refer to "repeater" for iteration-specific behavior
-;stmt cannot use more than 1 parameter (MPASM gets confused by commas; doesn't know which macro gets the params)
-;params:
-; count = #times to repeat stmt
-; stmt = statement to be repeated
-REPEAT MACRO count, stmt, arg
-    NOEXPAND  ;hide clutter
-;?    EXPAND_PUSH FALSE
-    WARNIF !(count), [WARNING] no repeat?,
-    LOCAL repeater = 0 ;count UP to allow stmt to use repeater value
-    LOCAL COUNT = count
-    while repeater < COUNT  ;0, 1, ..., count-1
-;	if arg == NOARG
-;	    EXPAND_RESTORE  ;show generated code
-;    stmt
-;	    NOEXPAND  ;hide clutter
-;	else
-	EXPAND_RESTORE  ;show generated code
-    stmt, arg
-	NOEXPAND  ;hide clutter
+;add lookup for non-power of 2:
+;find_log2 macro val
+;    LOCAL bit = 0;
+;    while BIT(bit)
+;	if BIT(bit) > 0
+;    messg #v(asmpower2), #v(oscpower2), #v(prescpower2), #v(asmbit) @__LINE__
+;	    CONSTANT log2(asmpower2) = asmbit
 ;	endif
-repeater += 1
-	if repeater > d'1000'  ;paranoid; prevent run-away code expansion
-	    ERRIF TRUE, [ERROR] Code generator loop too big: #v(repeater) of #v(COUNT)
-	    EXITM
-	endif
-    endw
-    EXPAND_RESTORE ;_POP
-    ENDM
-;REPEAT macro count, stmt
-;    NOEXPAND  ;hide clutter
-;    REPEAT2 count, stmt,
+;ASM_MSB set asmpower2  ;remember MSB; assembler uses 32-bit values
+;asmpower2 *= 2
 ;    endm
 
+;log2 function:
+;converts value -> bit mask at compile time; CAUTION: assumes value is exact power of 2
+;usage: LOG2_#v(bit#) = power of 2
+;NOTE: only works for exact powers of 2
+;equivalent to the following definitions:
+;#define LOG2_65536  d'16'
+; ...
+;#define LOG2_4  2
+;#define LOG2_2  1
+;#define LOG2_1  0
+;#define LOG2_0  0
+;    EXPAND_PUSH FALSE
+#define log2(n)  LOG2_#v(n)
+;#define osclog2(freq)  OSCLOG2_#v(freq)
+;#define osclog2(freq)  log2((freq) / 250 * 256); kludge: convert clock freq to power of 2
+    CONSTANT log2(0) = 0 ;special case
+;    CONSTANT osc_log2(0) = 0;
+    VARIABLE asmbit = 0, asmpower2 = 1;, oscpower2 = 1, prescpower2 = 1;
+    while asmpower2 ;asmbit <= d'16'  ;-1, 0, 1, 2, ..., 16
+;	CONSTANT BIT_#v(IIF(bit < 0, 0, 1<<bit)) = IIF(bit < 0, 0, bit)
+	if asmpower2 > 0
+;    messg #v(asmpower2), #v(oscpower2), #v(prescpower2), #v(asmbit) @__LINE__
+	    CONSTANT log2(asmpower2) = asmbit
+;	    CONSTANT osclog2(oscpower2) = asmbit
+;	    CONSTANT log2(oscpower2) = asmbit
+;	    CONSTANT log2(prescpower2) = asmbit
+	endif
+	if !(2 * asmpower2)
+	    EMITL ASM_MSB EQU #v(asmpower2)  ;remember MSB; assembler uses 32-bit signed values so this should be 32
+	endif
+asmpower2 <<= 1
+;oscpower2 *= 2
+;	if oscpower2 == 128
+;oscpower = 125
+;	endif
+;oscpower2 = IIF(asmpower2 != 128, IIF(asmpower2 != 32768, 2 * oscpower2, 31250), 125); adjust to powers of 10 for clock freqs
+;prescpower2 = IIF(asmpower2 != 128, IIF(asmpower2 != 32768, 2 * prescpower2, 31250), 122); adjust to powers of 10 for prescalars
+asmbit += 1
+    endw
+;    EXPAND_POP
+    ERRIF(log2(1) | log2(0), [ERROR] LOG2_ constants are bad: log2(1) = #v(log2(1)) and log2(0) = #v(log2(0))"," should be 0 @__LINE__); paranoid self-check
+    ERRIF(log2(1024) != 10, [ERROR] LOG2_ constants are bad: log2(1024) = #v(log2(1024))"," should be #v(10) @__LINE__); paranoid self-check
+;    ERRIF (log2(1 KHz) != 10) | (log2(1 MHz) != 20), [ERROR] OSCLOG2_ constants are bad: log2(1 KHz) = #v(log2(1 KHz)) and log2(1 MHz) = #v(log2(1 MHz)), should be 10 and 20 ;paranoid self-check
+;ASM_MSB set 0x80000000  ;assembler uses 32-bit values
+    ERRIF((ASM_MSB << 1) || !ASM_MSB, [ERROR] ASM_MSB incorrect value: #v(ASM_MSB << 1)"," #v(ASM_MSB) @__LINE__); paranoid check
+    WARNIF((ASM_MSB | 0x800) & 0x800 != 0X800, [ERROR] bit-wise & !worky on ASM_MSB #v(ASM_MSB): #v((ASM_MSB | 0x800) & 0x800) @__LINE__);
 
-;; opcode helpers ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;operand types:
-;allows pseudo-opcodes to accept either literal or register values
-;NOTE: assembler uses 32-bit constants internally; use msb to distinguish literal values from register addresses since it is not usually needed for code generation (which is only 8 or 14 bits)
-;literal value operands:
-#define BIT(n)  YNBIT(1, n); //(1 << (n))
-#define NOBIT(n)  0; //YNBIT(0, n); (0 << (n))
-#define YNBIT(yesno, n)  ((yesno) << (n))
-#define XBIT(n)  NOBIT(n); don't care (safer to turn off?)
-#define LITBIT(n)  LITERAL(BIT(n))
-#define LITERAL(n)  (ASM_MSB | (n))  ;prepend this to any 8-, 16- or 24-bit literal values used as pseudo-opcode parameters, to distinguish them from register addresses (which are only 1 byte)
-#define ISLIT(val)  ((val) & ASM_MSB) ;((addr) & ASM_MSB) ;&& !ISPSEUDO(thing))  ;check for a literal
-#define LIT2VAL(n)  ((n) & ~ASM_MSB)  ;convert from literal to number (strips _LITERAL tag)
-;register operands:
-#define REGISTER(a)  (a) ;address as-is
-#define REG2ADDR(a)  (a)
+;get #bits in a literal value:
+;    VARIABLE NUMBITS;
+;numbits macro val
+;NUMBITS = 
+    
+;get msb of a literal value:
+    VARIABLE FOUND_MSB
+find_msb macro value
+;    EXPAND_PUSH TRUE
+FOUND_MSB = ASM_MSB
+    while FOUND_MSB
+	if (value) & FOUND_MSB
+;	    EXPAND_POP
+	    exitm
+	endif
+FOUND_MSB >>= 1
+    endw
+;    EXPAND_POP
+    endm
 
+
+;; memory management helpers ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;PIC memory banks:
+;#define COMMON_START  0
+#define COMMON_END  0xC
+#define GPR_START  0x20
+#define GPR_END  0x70
+;    CONSTANT GPR_LEN = GPR_END - GPR_START;
+#define BANKLEN  0x80
+;    CONSTANT NONBANKED_LEN = BANKLEN - GPR_END;
+;line too long    CONSTANT BANKLEN = 0X80;
+#define BANK_UNKN  -1 ;non-banked or unknown
+;line too long    CONSTANT BANK_UNKN = -1; non-banked or unknown
+#define BANKOFS(reg)  ((reg) % BANKLEN)
+#define ISBANKED(reg)  ((BANKOFS(reg) >= COMMON_END) && (BANKOFS(reg) < GPR_END))
+;    MESSG "TODO: check !banked reg also @__LINE__"
+#define BANKOF(reg)  IIF(ISBANKED(reg), REG2ADDR(reg) / BANKLEN, BANK_UNKN)
 
 ;optimized bank select:
 ;only generates bank selects if needed
     VARIABLE BANK_TRACKER = BANK_UNKN; ;currently selected bank
     VARIABLE BANKSEL_KEEP = 0, BANKSEL_DROP = 0; ;perf stats
 BANKCHK MACRO reg; ;, fixit, undef_ok
-    NOEXPAND  ;reduce clutter in LST file
-;    MESSG reg
+    EXPAND_PUSH FALSE; reduce clutter in LST file
+;    MESSG reg @__LINE__
     LOCAL REG = reg ;kludge; force eval (avoids "missing operand" and "missing argument" errors/MPASM bugs); also helps avoid "line too long" messages (MPASM limit 200)
-;    MESSG reg, #v(REG)
-;    messg "bankof reg, nobank", #v(BANKOF(REG)), #v(BANK_UNKN) ;debug
-    if !ISBANKED(REG) ;BANKOF(REG) == BANK_UNKN
-;BANKSEL_DROP += 1  ;count saved instructions (macro perf)
-;NO BANK_TRACKER = reg  ;remember where latest value came from (in case never set)
-;	messg "bankof reg == nobank"
-	EXPAND_RESTORE
-	exitm
-    endif
-    LOCAL REGBANK = BANKOF(REG) ;kludge: expanded line too long for MPASM
-;    messg BANKOF(REG); #v(REGBANK);
-    if REGBANK == BANKOF(BANK_TRACKER)  ;don't need to set RP0/RP1
-;PREVBANK = REG  ;update last-used reg anyway (helpful for debug)
-BANKSEL_DROP += 1  ;count saved instructions (macro perf)
-;;--NESTED_BANKCHK
-;	messg "bankof reg == bankof cur"
-	EXPAND_RESTORE
-	exitm
-    endif
-;    messg "banksel bankof reg"
+;    MESSG reg, #v(REG) @__LINE__
+;    messg "bankof reg, nobank", #v(BANKOF(REG)), #v(BANK_UNKN)  @__LINE__;debug
+    if !ISLIT(REG) && ISBANKED(REG); BANKOF(REG) == BANK_UNKN
+        LOCAL REGBANK = BANKOF(REG) ;kludge: expanded line too long for MPASM
+;    messg BANKOF(REG) @__LINE__; #v(REGBANK);
+	if REGBANK != BANKOF(BANK_TRACKER)  ;don't need to set RP0/RP1
+;    messg "banksel bankof reg @__LINE__"
 ;    movlb BANKOF(REG) ;bank sel
+	    EMIT banksel reg;
 BANKSEL_KEEP += 1
 BANK_TRACKER = reg  ;remember where latest value came from (in case never set)
-    EXPAND_RESTORE
-    banksel reg;
+	else
+;PREVBANK = REG  ;update last-used reg anyway (helpful for debug)
+BANKSEL_DROP += 1  ;count saved instructions (macro perf)
+	endif
+    endif
+    EXPAND_POP
     endm
 
+eof_#v(EOF_COUNT) macro
+    messg [INFO] bank sel: #v(BANKSEL_KEEP) (#v(pct(BANKSEL_KEEP, BANKSEL_KEEP + BANKSEL_DROP))%), dropped: #v(BANKSEL_DROP) (#v(pct(BANKSEL_DROP, BANKSEL_KEEP + BANKSEL_DROP))%) @__LINE__; ;perf stats
+    endm
+EOF_COUNT += 1;
+
+
 DROP_BANK macro
-    NOEXPAND
+;    EXPAND_PUSH FALSE
 BANK_TRACKER = BANK_UNKN  ;forget where latest value came from (used for jump targets)
-    EXPAND_RESTORE
+;    EXPAND_POP
     endm
 
 ;avoid warnings when bank is known to be selected
 ;#define NOARG  -1; dummy arg (MPASM doesn't like missing/optional args)
-#if 0
-BANKSAFE macro stmt, arg
-    NOEXPAND
+BANKSAFE macro stmt
+;    EXPAND_PUSH FALSE
+;    NOEXPAND
     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if you've set the bank select bits correctly)
-;    if arg == NOARG
+;    messg BANKSAFE: stmt @__LINE__
 ;        EXPAND_RESTORE
-;	stmt
+;    EXPAND_PUSH TRUE
+    stmt
+;    EXPAND_POP
 ;	NOEXPAND
-;    else
-    messg stmt
-    messg arg
-        EXPAND_RESTORE
-	stmt, arg
-	NOEXPAND
-;    endif
-    errorlevel +302 ;kludge: Enable bank switch warning
-    EXPAND_RESTORE
+    errorlevel +302 ;kludge: re-Enable bank switch warning
+;    EXPAND_RESTORE
+;    EXPAND_POP
     endm
-#endif
-;BANKSAFE2 macro stmt, arg
+;BANKSAFE1 macro stmt, arg
+;    NOEXPAND
+;    errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if you've set the bank select bits correctly)
+;;    if arg == NOARG
+;;        EXPAND_RESTORE
+;;	stmt
+;;	NOEXPAND
+;;    else
+;    messg stmt @__LINE__
+;    messg arg @__LINE__
+;        EXPAND_RESTORE
+;	stmt, arg
+;	NOEXPAND
+;;    endif
+;    errorlevel +302 ;kludge: re-Enable bank switch warning
+;    EXPAND_RESTORE
+;    endm
+;BANKSAFE2 macro stmt, arg1, arsg2
 ;    NOEXPAND
 ;    errorlevel -302 ;kludge: Disable bank switch warning
-;    EXPAND_RESTORE
-;    stmt, arg
-;    NOEXPAND
-;    errorlevel +302 ;kludge: Enable bank switch warning
+;	EXPAND_RESTORE
+;	stmt, arg1, arg2
+;	NOEXPAND
+;    errorlevel +302 ;kludge: re-Enable bank switch warning
 ;    EXPAND_RESTORE
 ;    endm
  
@@ -529,11 +1916,69 @@ DROP_CONTEXT MACRO
     endm
 
 
+;    VARIABLE CTX_DEPTH = 0
+;#define CONTEXT_PUSH  CTX_STATE TRUE
+;#define CONTEXT_POP  CTX_STATE FALSE
+;CTX_STATE macro push_pop
+;    if BOOL2INT(push_pop)
+;	VARIABLE CTX_ADDR#v(CTX_DEPTH) = $
+;	VARIABLE CTX_WREG#v(CTX_DEPTH) = WREG_TRACKER
+;	VARIABLE CTX_BANK#v(CTX_DEPTH) = BANK_TRACKER
+;	DROP_CONTEXT
+;CTX_DEPTH += 1
+;    else
+;CTX_DEPTH -= 1
+;        ORG CTX_ADDR#v(CTX_DEPTH)
+;WREG_TRACKER = CTX_WREG#v(CTX_DEPTH)
+;BANK_TRACKER = CTX_BANK#v(CTX_DEPTH)
+;    endif
+;    endm
+
+;push context under top of stack:
+;CONTEXT_PUSH_UNDER macro
+;    VARIABLE CTX_ADDR#v(CTX_DEPTH) = CTX_ADDR#v(CTX_DEPTH - 1);
+;    VARIABLE CTX_WREG#v(CTX_DEPTH) = CTX_WREG#v(CTX_DEPTH - 1);
+;    VARIABLE CTX_BANK#v(CTX_DEPTH) = CTX_BANK#v(CTX_DEPTH - 1);
+;CTX_DEPTH -=1
+;    CONTEXT_PUSH
+;CTX_DEPTH +=1
+;    endm
+
+;eof_#v(EOF_COUNT) macro
+;    WARNIF(CTX_DEPTH, [WARNING] context stack not empty @eof: #v(CTX_DEPTH)"," last addr = #v(CTX_ADDR#v(CTX_DEPTH - 1)) @__LINE__)
+;    endm
+;EOF_COUNT += 1;
+
+;save/restore compile-time execution context:
+;allows better banksel/pagesel/wreg optimization
+;kludge: use #v(0) in lieu of token pasting
+;#define bitnum_arg(argg)  withbit_#v(argg)
+    VARIABLE NUM_CONTEXT = 0
+CONTEXT_SAVE macro name
+name EQU #v(NUM_CONTEXT); allow context access by caller-supplied name
+NUM_CONTEXT += 1
+    VARIABLE ctx_addr_#v(name) = $
+    VARIABLE ctx_wreg_#v(name) = WREG_TRACKER
+    VARIABLE ctx_bank_#v(name) = BANK_TRACKER
+    VARIABLE ctx_page_#v(name) = PAGE_TRACKER
+;no, let stmt change it;    DROP_CONTEXT
+;    messg save ctx_#v(name)_addr #v(ctx_#v(name)_addr), ctx_#v(name)_page #v(ctx_#v(name)_page) @__LINE__
+    endm
+
+CONTEXT_RESTORE macro name
+;    messg restore ctx_#v(name)_addr #v(ctx_#v(name)_addr), ctx_#v(name)_page #v(ctx_#v(name)_page) @__LINE__
+    EMIT ORG ctx_addr_#v(name);
+WREG_TRACKER = ctx_wreg_#v(name)
+BANK_TRACKER = ctx_bank_#v(name)
+PAGE_TRACKER = ctx_page_#v(name)
+    endm
+
+
 ;convenience wrappers for SAFE_ALLOC macro:
-;#define BDCL(name)  ALLOC_GPR name, TRUE; banked alloc
-;#define NBDCL(name)  ALLOC_GPR name, FALSE; non-banked alloc
-#define BDCL  ALLOC_GPR 0, ; bank 0 alloc
-#define NBDCL  ALLOC_GPR NOBANK, ; non-banked alloc
+;#define b0DCL(name)  ALLOC_GPR name, TRUE; banked alloc
+;#define nbDCL(name)  ALLOC_GPR name, FALSE; non-banked alloc
+#define b0DCL  ALLOC_GPR 0, ; bank 0 alloc
+#define nbDCL  ALLOC_GPR NOBANK, ; non-banked alloc
 ;allocate a banked/non-banked/reallocated variable:
 ;checks for address overflow on allocated variables
 ;also saves banked or non-banked RAM address for continuation in a later CBLOCK
@@ -556,109 +2001,57 @@ DROP_CONTEXT MACRO
 ; banked = flag controlling where it is allocated; TRUE/FALSE == yes/no, MAYBE == reallocate from caller-specified pool of reusable space
     VARIABLE RAM_BLOCK = 0; unique name for each block
 ALLOC_GPR MACRO bank, name, numbytes
-    NOEXPAND  ;reduce clutter
+;    EXPAND_PUSH FALSE
+;    NOEXPAND  ;reduce clutter
 ;    EXPAND_PUSH TRUE  ;show RAM allocations in LST
-    EXPAND ;show RAM allocations in LST
+;    EXPAND ;show RAM allocations in LST
+    EXPAND_PUSH TRUE; CAUTION: macro expand must be set outside of cblock
     CBLOCK NEXT_RAM#v(bank); BOOL2INT(banked))  ;continue where we left off last time
 	name numbytes
     ENDC  ;can't span macros
+    EXPAND_POP
 ;    EXPAND_PUSH FALSE
 RAM_BLOCK += 1  ;need a unique symbol name so assembler doesn't complain; LOCAL won't work inside CBLOCK
-    EXPAND_RESTORE; NOEXPAND
+;    EXPAND_RESTORE; NOEXPAND
     CBLOCK
 	LATEST_RAM#v(RAM_BLOCK):0  ;get address of last alloc; need additional CBLOCK because macros cannot span CBLOCKS
     ENDC
-    NOEXPAND
+;    NOEXPAND
 NEXT_RAM#v(bank) = LATEST_RAM#v(RAM_BLOCK)  ;update pointer to next available RAM location
 RAM_USED#v(bank) = NEXT_RAM#v(bank) - RAM_START#v(bank); BOOL2INT(banked))
     CONSTANT SIZEOF(name) = LATEST_RAM#v(RAM_BLOCK) - name;
-    ERRIF NEXT_RAM#v(bank) > MAX_RAM#v(bank), [ERROR] ALLOC_GPR: RAM overflow #v(LATEST_RAM#v(RAM_BLOCK)) > max #v(MAX_RAM#v(bank)),; BOOL2INT(banked))),
+    ERRIF(NEXT_RAM#v(bank) > MAX_RAM#v(bank), [ERROR] ALLOC_GPR: RAM overflow #v(LATEST_RAM#v(RAM_BLOCK)) > max #v(MAX_RAM#v(bank)) @__LINE__); BOOL2INT(banked))),
 ;    ERRIF LAST_RAM_ADDRESS_#v(RAM_BLOCK) > RAM_END#v(BOOL2INT(banked)), [ERROR] SAFE_ALLOC: RAM overflow #v(LAST_RAM_ADDRESS_#v(RAM_BLOCK)) > end #v(RAM_END#v(BOOL2INT(banked)))
 ;    ERRIF LAST_RAM_ADDRESS_#v(RAM_BLOCK) <= RAM_START#v(BOOL2INT(banked)), [ERROR] SAFE_ALLOC: RAM overflow #v(LAST_RAM_ADDRESS_#v(RAM_BLOCK)) <= start #v(RAM_START#v(BOOL2INT(banked)))
 ;    EXPAND_POP,
 ;    EXPAND_POP,
+;    EXPAND_POP
     ENDM
 
-
-;; misc pseudo opcodes ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-    VARIABLE PAGESEL_KEEP = 0, PAGESEL_DROP = 0; ;perf stats
-#define call  safe_call; override default opcode for PCH checking and BSR, WREG tracking
-call macro dest
-    NOEXPAND; hide clutter
-    ERRIF LITPAGEOF(dest), [ERROR] dest !on page 0: #v(LITPAGEOF(dest)),
-PAGESEL_DROP += 1
-;    LOCAL WREG_SAVE = WREG_TRACKER
-    EXPAND_RESTORE; NOEXPAND
-    da 0x2000 + dest; call dest
-    NOEXPAND
-    if (dest == nop#v(4)) || (dest == nop#v(8)); these don't alter BSR or WREG
-	exitm
-    endif
-    DROP_CONTEXT; BSR and WREG unknown here
-    if dest == choose_next_color
-WREG_TRACKER = color; kludge: avoid unknown contents warning
-    endif
-#ifdef BITBANG
-    if dest == bitbang_wreg
-BANK_TRACKER = LATA; preserve caller context to improve timing
-    endif
-#endif
+eof_#v(EOF_COUNT) macro
+    messg [INFO] bank0 used: #v(RAM_USED#v(0))/#v(RAM_LEN#v(0)) (#v(pct(RAM_USED#v(0), RAM_LEN#v(0)))%) @__LINE__
+    MESSG [INFO] bank1 used: #v(RAM_USED#v(1))/#v(RAM_LEN#v(1)) (#v(pct(RAM_USED#v(1), RAM_LEN#v(1)))%) @__LINE__
+    MESSG [INFO] non-banked used: #v(RAM_USED#v(NOBANK))/#v(RAM_LEN#v(NOBANK)) (#v(pct(RAM_USED#v(NOBANK), RAM_LEN#v(NOBANK)))%) @__LINE__
     endm
-
-#define goto  safe_goto; override default opcode for PCH checking
-goto macro dest
-    ERRIF LITPAGEOF(dest), [ERROR] dest !on page 0: #v(LITPAGEOF(dest)),
-PAGESEL_DROP += 1
-    EXPAND_RESTORE; NOEXPAND
-    da 0x2800 + dest; goto dest
-    NOEXPAND
-;not needed: fall-thru would be handled by earlier code    DROP_CONTEXT; BSR and WREG unknown here if dest falls through
-    endm
+EOF_COUNT += 1;
 
 
-#define nop  multi_nop; override default opcode for PCH checking and BSR, WREG tracking
-nop macro count, dummy; dummy arg for usage with REPEAT
-    NOEXPAND; hide clutter
-    LOCAL COUNT = count
-    WARNIF !COUNT, [WARNING] no nop?,
-    if COUNT & 1
-        EXPAND_RESTORE; NOEXPAND
-	da 0; nop
-	NOEXPAND
-COUNT -= 1
-    endif
-    if COUNT & 2
-        EXPAND_RESTORE; NOEXPAND
-        goto $+1; 1 instr, 2 cycles (saves space)
-	NOEXPAND
-COUNT -= 2
-    endif
-;multiples of 4:
-;    if count >= 4
-    if COUNT
-        EXPAND_RESTORE; NOEXPAND
-	call nop#v(COUNT);
-	NOEXPAND
-    endif
-    endm
+;; custom 8-bit opcodes ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;#define PROGDCL  EMIT da; put value into prog space; use for opcodes or packed read-only data
+
+;operand types:
+;allows pseudo-opcodes to accept either literal or register values
+;NOTE: assembler uses 32-bit constants internally; use msb to distinguish literal values from register addresses since it is not usually needed for code generation (which is only 8 or 14 bits)
+;literal value operands:
+#define LITERAL(n)  (ASM_MSB | (n))  ;prepend this to any 8-, 16- or 24-bit literal values used as pseudo-opcode parameters, to distinguish them from register addresses (which are only 1 byte)
+#define ISLIT(val)  ((val) & ASM_MSB) ;((addr) & ASM_MSB) ;&& !ISPSEUDO(thing))  ;check for a literal
+#define LIT2VAL(n)  ((n) & ~ASM_MSB)  ;convert from literal to number (strips _LITERAL tag)
+;register operands:
+#define REGISTER(a)  (a) ;address as-is
+#define REG2ADDR(a)  (a)
 
 
-;nop2if macro want_nop
-;    if want_nop
-;	nop2
-;    endif
-;    endm
-
-nop4if macro want_nop
-    if want_nop
-	nop 4,
-    endif
-    endm
-
-
-;; 8-bit pseudo opcodes ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-    
 ;pseudo-reg:
 ;these have special meaning for mov8
     CONSTANT INDF1_special = 0x10000;
@@ -671,110 +2064,233 @@ nop4if macro want_nop
     CONSTANT INDF0_predec = (INDF0_special + 1); moviw --INDF0
     CONSTANT INDF0_postinc = (INDF0_special + 2); moviw INDF0++
     CONSTANT INDF0_postdec = (INDF0_special + 3); moviw INDF0--
-#define MOVIW_opc(fsr, mode)  da 0x10 | ((fsr) == FSR1) << 2 | ((mode) & 3)
-#define MOVWI_opc(fsr, mode)  da 0x18 | ((fsr) == FSR1) << 2 | ((mode) & 3)
+;#define MOVIW_opc(fsr, mode)  PROGDCL 0x10 | ((fsr) == FSR1) << 2 | ((mode) & 3)
+#define MOVIW_opc(fsr, mode)  MOVIW_#v((fsr) == FSR1)_#v((mode) & 3)
+#define MOVIW_1_0  MOVIW ++FSR1
+#define MOVIW_1_1  MOVIW --FSR1
+#define MOVIW_1_2  MOVIW FSR1++
+#define MOVIW_1_3  MOVIW FSR1--
+#define MOVIW_0_0  MOVIW ++FSR0
+#define MOVIW_0_1  MOVIW --FSR0
+#define MOVIW_0_2  MOVIW FSR0++
+#define MOVIW_0_3  MOVIW FSR0--
+;#define MOVWI_opc(fsr, mode)  PROGDCL 0x18 | ((fsr) == FSR1) << 2 | ((mode) & 3)
+#define MOVWI_opc(fsr, mode)  MOVWI_#v((fsr) == FSR1)_#v((mode) & 3)
+#define MOVWI_1_0  MOVWI ++FSR1
+#define MOVWI_1_1  MOVWI --FSR1
+#define MOVWI_1_2  MOVWI FSR1++
+#define MOVWI_1_3  MOVWI FSR1--
+#define MOVWI_0_0  MOVWI ++FSR0
+#define MOVWI_0_1  MOVWI --FSR0
+#define MOVWI_0_2  MOVWI FSR0++
+#define MOVWI_0_3  MOVWI FSR0--
 
 
 ;move (copy) reg or value to reg:
-;    messg "TODO: optimize mov8 to avoid redundant loads"
+;optimized to reduce banksel and redundant WREG loads
+;    messg "TODO: optimize mov8 to avoid redundant loads @__LINE__"
 ;#define UNKNOWN  -1 ;non-banked or unknown
-    CONSTANT WREG_UNKN = -1;
+    CONSTANT WREG_UNKN = ASM_MSB >> 1; -1; ISLIT == FALSE
     VARIABLE WREG_TRACKER = WREG_UNKN ;unknown at start
 mov8 macro dest, src
-    NOEXPAND  ;reduce clutter
+;    EXPAND_PUSH FALSE
+;    NOEXPAND  ;reduce clutter
 ;    if (SRC == DEST) && ((srcbytes) == (destbytes)) && !(reverse)  ;nothing to do
     LOCAL SRC = src ;kludge; force eval (avoids "missing operand" and "missing argument" errors/MPASM bugs); also helps avoid "line too long" messages (MPASM limit 200)
     LOCAL DEST = dest ;kludge; force eval (avoids "missing operand" and "missing argument" errors/MPASM bugs); also helps avoid "line too long" messages (MPASM limit 200)
-;    messg "mov8", #v(DEST), #v(SRC), #v(ISLIT(SRC)), #v(LIT2VAL(SRC))
-;    messg src, dest;
+    WARNIF(DEST == SRC, [WARNING] useless mov8 from dest to src @__LINE__);
+;    messg "mov8", #v(DEST), #v(SRC), #v(ISLIT(SRC)), #v(LIT2VAL(SRC)) @__LINE__
+;    messg src, dest @__LINE__;
     if ISLIT(SRC)  ;unpack SRC bytes
-; messg dest, #v(!LIT2VAL(SRC)), #v(DEST != WREG), #v(!(DEST & INDF0_special)), #v(!(DEST & INDF1_special))
+; messg dest, #v(!LIT2VAL(SRC)), #v(DEST != WREG), #v(!(DEST & INDF0_special)), #v(!(DEST & INDF1_special)) @__LINE__
 	if !LIT2VAL(SRC) && (DEST != WREG) && !(DEST & INDF0_special) && !(DEST & INDF1_special)
-	    BANKCHK dest;
-;	    BANKSAFE 
-	    errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if you've set the bank select bits correctly)
-	    EXPAND_RESTORE; NOEXPAND
-	    clrf dest ;NOARG; REG2ADDR(DEST); ;special case
-	    NOEXPAND
-	    errorlevel +302 ;kludge: Enable bank switch warning
+;	    BANKCHK dest;
+;	    BANKSAFE clrf dest; special case
+;	    EMIT CLRF dest;
+	    CLRF dest;
+;	    EXPAND_POP
 	    exitm
 	endif
 	if WREG_TRACKER != src
-	    EXPAND_RESTORE ;show generated opcodes
-	    movlw LIT2VAL(src)
-	    NOEXPAND
-WREG_TRACKER = src
+;	    EXPAND_RESTORE ;show generated opcodes
+;	    EMIT movlw LIT2VAL(src); #v(LIT2VAL(SRC))
+	    MOVLW LIT2VAL(src);
+;	    NOEXPAND
+;WREG_TRACKER = src
 	endif
     else ;register
 ;special pseudo-reg:
 	if src & INDF0_special
-	    EXPAND_RESTORE; NOEXPAND
-	    MOVIW_opc(FSR0, SRC);
-	    NOEXPAND  ;reduce clutter
+;	    EXPAND_RESTORE; NOEXPAND
+	    EMIT MOVIW_opc(FSR0, SRC);
+;	    NOEXPAND  ;reduce clutter
 	else
 	    if src & INDF1_special
-	        EXPAND_RESTORE; NOEXPAND
-		MOVIW_opc(FSR1, SRC);
-		NOEXPAND  ;reduce clutter
+;	        EXPAND_RESTORE; NOEXPAND
+		EMIT MOVIW_opc(FSR1, SRC);
+;		NOEXPAND  ;reduce clutter
 	    else
 		if (SRC != WREG) && (SRC != WREG_TRACKER)
-		    BANKCHK src;
-;        errorlevel -302 ;kludge: Disable bank switch warning
-		    errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if you've set the bank select bits correctly)
-;		    BANKSAFE 
-		    EXPAND_RESTORE; NOEXPAND
-		    movf src, W; REG2ADDR(SRC), W
-		    NOEXPAND
-		    errorlevel +302 ;kludge: Enable bank switch warning
-;	errorlevel +302 ;kludge: Enable bank switch warning
-;		    NOEXPAND  ;reduce clutter
-WREG_TRACKER = src
-		else
-		    if (SRC == WREG) && (WREG_TRACKER == WREG_UNKN)
-			messg [WARNING] WREG contents unknown here
-		    endif
+;		    BANKCHK src;
+;		    BANKSAFE dest_arg(W) movf src;, W;
+;WREG_TRACKER = src
+		    MOVF src, W;
+;		else
+;		    if (SRC == WREG) && (WREG_TRACKER == WREG_UNKN)
+;			messg [WARNING] WREG contents unknown here @__LINE__
+;		    endif
 		endif
 	    endif
 	endif
     endif
     if dest & INDF0_special
-       EXPAND_RESTORE; NOEXPAND
-	MOVWI_opc(FSR0, dest);
-	NOEXPAND  ;reduce clutter
+;        EXPAND_RESTORE; NOEXPAND
+	EMIT MOVWI_opc(FSR0, dest);
+;	NOEXPAND  ;reduce clutter
     else
 	if dest & INDF1_special
-	    EXPAND_RESTORE; NOEXPAND
-	    MOVWI_opc(FSR1, dest);
-	    NOEXPAND  ;reduce clutter
+;	    EXPAND_RESTORE; NOEXPAND
+	    EMIT MOVWI_opc(FSR1, dest);
+;	    NOEXPAND  ;reduce clutter
 	else
 	    if dest != WREG
-		BANKCHK dest;
-;    errorlevel -302 ;kludge: Disable bank switch warning
-	        errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if you've set the bank select bits correctly)
-;		BANKSAFE 
-	        EXPAND_RESTORE; NOEXPAND
-		movwf dest ;NOARG; REG2ADDR(DEST)
-		NOEXPAND  ;reduce clutter
-	        errorlevel +302 ;kludge: Enable bank switch warning
-;    errorlevel +302 ;kludge: Enable bank switch warning
+;		BANKCHK dest;
+;		BANKSAFE movwf dest; NOARG
+		MOVWF dest;
 	    endif
         endif
     endif
-    EXPAND_RESTORE
+;    EXPAND_POP
     endm
 
 DROP_WREG macro
-    NOEXPAND
+;    EXPAND_PUSH FALSE
 WREG_TRACKER = WREG_UNKN  ;forget latest value
-    EXPAND_RESTORE
+;    EXPAND_POP
     endm
 
 
-#define clrw  clrw_tracker; override default opcode for WREG tracking
+;2's complement:
+comf2s macro reg, dest
+;    EXPAND_PUSH FALSE
+    BANKCHK reg;
+;    BANKSAFE dest_arg(dest) comf reg;, dest;
+    EMIT dest_arg(dest) comf reg;, dest;
+;    messg here @__LINE__
+;    BANKSAFE dest_arg(F) incf IIF(dest == W, WREG, reg);, F;
+    INCF IIF(dest == W, WREG, reg), F;
+;    if (reg == WREG) && ISLIT(WREG_TRACKER)
+    if (reg == WREG) || !BOOL2INT(dest)
+;WREG_TRACKER = LITERAL((0 - LITVAL(WREG_TRACKER)) & 0xFF)
+WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), LITERAL((0 - WREG_TRACKER) & 0xFF), WREG_UNKN)
+;    else
+;	if (dest == W) 
+;	    DROP_WREG; unknown reg contents
+;	endif
+    endif
+;    EXPAND_POP
+    endm
+
+
+;swap 2 reg:
+;uses no temps
+swapreg macro reg1, reg2
+;    EXPAND_PUSH FALSE
+    if (reg2) == WREG
+	XORWF reg1, W; reg ^ WREG
+	XORWF reg1, F; reg ^ (reg ^ WREG) == WREG
+	XORWF reg1, W; WREG ^ (reg ^ WREG) == reg
+    else
+	if (reg1) != WREG
+	    MOVF reg1, W;
+	endif
+	XORWF reg2, W; reg ^ WREG
+	XORWF reg2, F; reg ^ (reg ^ WREG) == WREG
+	XORWF reg1, F; WREG ^ (reg ^ WREG) == reg
+    endif
+;    EXPAND_POP
+    endm
+
+
+;bank-safe, tracker versions of opcodes:
+
+#define CLRF  clrf_tracker; override default opcode for WREG tracking
 ;WREG tracking:
-clrw macro
-    mov8 WREG, LITERAL(0);
+CLRF macro reg
+;    EXPAND_PUSH FALSE
+    BANKCHK reg
+;too deep :(    mov8 reg, LITERAL(0);
+    BANKSAFE EMIT clrf reg; PROGDCL 0x180 | ((reg) % (BANKLEN));
+    if reg == WREG
+WREG_TRACKER = LITERAL(0);
+    endif
+;    EXPAND_POP
     endm
+
+#define MOVWF  movwf_banksafe
+MOVWF macro reg
+;    EXPAND_PUSH FALSE
+    BANKCHK reg
+    BANKSAFE EMIT movwf reg;
+;    EXPAND_POP
+    endm
+
+
+#define MOVF  movf_banksafe
+MOVF macro reg, dest
+;    EXPAND_PUSH FALSE
+    BANKCHK reg
+    BANKSAFE EMIT dest_arg(dest) movf reg;, dest;
+;    if (reg == WREG) || !BOOL2INT(dest)
+    if !BOOL2INT(dest)
+WREG_TRACKER = reg; IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+    endif
+;    EXPAND_POP
+    endm
+
+
+#define INCF  incf_banksafe
+INCF macro reg, dest
+;    EXPAND_PUSH FALSE
+    BANKCHK reg
+    BANKSAFE EMIT dest_arg(dest) incf reg;, dest;
+    if (reg == WREG) || !BOOL2INT(dest)
+WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+    endif
+;    EXPAND_POP
+    endm
+
+
+#define DECF  decf_banksafe
+DECF macro reg, dest
+;    EXPAND_PUSH FALSE
+    BANKCHK reg
+    BANKSAFE EMIT dest_arg(dest) decf reg;, dest;
+    if (reg == WREG) || !BOOL2INT(dest)
+WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+    endif
+;    EXPAND_POP
+    endm
+
+#define ADDWF  addwf_banksafe
+ADDWF macro reg, dest
+;    EXPAND_PUSH FALSE
+    BANKCHK reg
+    BANKSAFE EMIT dest_arg(dest) addwf reg;, dest;
+    if (reg == WREG) || !BOOL2INT(dest)
+WREG_TRACKER = WREG_UNKN; IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+    endif
+;    EXPAND_POP
+    endm
+
+
+#define clrw  clrf WREG; clrw_tracker; override default opcode for WREG tracking
+#define CLRW  CLRF WREG; clrw_tracker; override default opcode for WREG tracking
+;WREG tracking:
+;clrw macro
+;    mov8 WREG, LITERAL(0);
+;    clrf WREG;
+;    endm
 
 ;#define moviw  moviw_tracker; override default opcode for WREG tracking
 ;moviw macro arg
@@ -782,247 +2298,499 @@ clrw macro
 ;    DROP_WREG
 ;    endm
 
-#define andlw  andlw_tracker; override default opcode for WREG tracking
-andlw macro arg
+#define MOVLW  movlw_tracker; override default opcode for WREG tracking
+MOVLW macro value
+;    EXPAND_PUSH FALSE
 ;    andlw arg
-    ERRIF (arg) & ~0xFF, [ERROR] extra AND bits ignored: #v((arg) & ~0xFF),
-    EXPAND_RESTORE; NOEXPAND
-    da 0x3900 + arg
-    NOEXPAND; reduce clutter
-;don't do this: (doesn't handle STATUS)
-;    if WREG_TRACKER != WREG_UNKN
-;WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), LITERAL(WREG_TRACKER & (arg)), WREG_UNKN)
-;    endif
-    DROP_WREG
+    ERRIF((value) & ~0xFF, [ERROR] extra MOV bits ignored: #v((value) & ~0xFF) @__LINE__)
+    if WREG_TRACKER != LITERAL(value)
+;    EXPAND_RESTORE; NOEXPAND
+;    messg movlw_tracker: "value" #v(value) value @__LINE__
+        EMIT movlw value; #v(value); PROGDCL 0x3000 | (value)
+;    NOEXPAND; reduce clutter
+WREG_TRACKER = LITERAL(value)
+    endif
+;    EXPAND_POP
     endm
 
-#define addlw  addlw_tracker; override default opcode for WREG tracking
-addlw macro arg
+#define ANDLW  andlw_tracker; override default opcode for WREG tracking
+ANDLW macro value
+;    EXPAND_PUSH FALSE
+;    andlw arg
+    ERRIF((value) & ~0xFF, [ERROR] extra AND bits ignored: #v((value) & ~0xFF) @__LINE__)
+;    EXPAND_RESTORE; NOEXPAND
+    EMIT andlw value; PROGDCL 0x3900 | value
+;    NOEXPAND; reduce clutter
+;don't do this: (doesn't handle STATUS)
+    if WREG_TRACKER != WREG_UNKN
+WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), LITERAL(WREG_TRACKER & (value)), WREG_UNKN)
+    endif
+;    DROP_WREG
+;    EXPAND_POP
+    endm
+
+#define IORLW  iorlw_tracker; override default opcode for WREG tracking
+IORLW macro value
+;    EXPAND_PUSH FALSE
+;    andlw arg
+    ERRIF((value) & ~0xFF, [ERROR] extra IOR bits ignored: #v((value) & ~0xFF) @__LINE__)
+;    EXPAND_RESTORE; NOEXPAND
+    EMIT iorlw value; PROGDCL 0x3800 | value
+;    NOEXPAND; reduce clutter
+;don't do this: (doesn't handle STATUS)
+    if WREG_TRACKER != WREG_UNKN
+WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), LITERAL(WREG_TRACKER | (value)), WREG_UNKN)
+    endif
+;    DROP_WREG
+;    EXPAND_POP
+    endm
+
+#define XORLW  xorlw_tracker; override default opcode for WREG tracking
+XORLW macro value
+;    EXPAND_PUSH FALSE
+;    andlw arg
+    ERRIF((value) & ~0xFF, [ERROR] extra XOR bits ignored: #v((value) & ~0xFF) @__LINE__)
+;    EXPAND_RESTORE; NOEXPAND
+    EMIT xorlw value; PROGDCL 0x3A00 | (value)
+;    NOEXPAND; reduce clutter
+;don't do this: (doesn't handle STATUS)
+    if WREG_TRACKER != WREG_UNKN
+WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), LITERAL(WREG_TRACKER ^ (value)), WREG_UNKN)
+    endif
+;    DROP_WREG
+;    EXPAND_POP
+    endm
+
+#define ADDLW  addlw_tracker; override default opcode for WREG tracking
+ADDLW macro value
+;    EXPAND_PUSH FALSE
 ;    addlw arg
-    ERRIF (arg) & ~0xFF, [ERROR] extra ADD bits ignored: #v((arg) & ~0xFF),
-    EXPAND_RESTORE; NOEXPAND
-    da 0x3E00 + arg
-    NOEXPAND; reduce clutter
+    ERRIF((value) & ~0xFF, [ERROR] extra ADD bits ignored: #v((value) & ~0xFF) @__LINE__)
+;    EXPAND_RESTORE; NOEXPAND
+    EMIT addlw value; PROGDCL 0x3E00 | (value)
+;    NOEXPAND; reduce clutter
 ;don't do this: (doesn't handle STATUS)
-;    if WREG_TRACKER != WREG_UNKN
-;WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), LITERAL(WREG_TRACKER + (arg)), WREG_UNKN)
-;    endif
-    DROP_WREG
+    if WREG_TRACKER != WREG_UNKN
+WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), LITERAL(WREG_TRACKER + (value)), WREG_UNKN)
+    endif
+;    DROP_WREG
+;    EXPAND_POP
     endm
 
 
-;; 1-bit pseudo opcodes: ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;set/clear bit:
-setbit macro dest, bit, bitval
-    NOEXPAND  ;reduce clutter
-;    if (SRC == DEST) && ((srcbytes) == (destbytes)) && !(reverse)  ;nothing to do
-;    LOCAL BIT = bit ;kludge; force eval (avoids "missing operand" and "missing argument" errors/MPASM bugs); also helps avoid "line too long" messages (MPASM limit 200)
-    LOCAL DEST = dest ;kludge; force eval (avoids "missing operand" and "missing argument" errors/MPASM bugs); also helps avoid "line too long" messages (MPASM limit 200)
-;    messg "mov8", #v(DEST), #v(SRC), #v(ISLIT(SRC)), #v(LIT2VAL(SRC))
-;    messg src, dest;
-    BANKCHK dest;
-    NOEXPAND  ;reduce clutter
-    errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if you've set the bank select bits correctly)
-    if BOOL2INT(bitval)
-;        BANKSAFE 
-	EXPAND_RESTORE; NOEXPAND
-	bsf dest, bit;
-        NOEXPAND  ;reduce clutter
-    else
-;	BANKSAFE 
-	EXPAND_RESTORE; NOEXPAND
-	bcf dest, bit;
-        NOEXPAND  ;reduce clutter
+#define BSF  bsf_tracker
+BSF macro reg, bitnum
+;    EXPAND_PUSH FALSE
+    ERRIF((bitnum) & ~7, [ERROR] invalid bitnum ignored: #v(bitnum) @__LINE__)
+    BANKCHK reg
+    BANKSAFE EMIT bitnum_arg(bitnum) bsf reg
+    if reg == WREG
+WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), LITERAL(WREG_TRACKER | BIT(bitnum)), WREG_UNKN)
     endif
-    errorlevel +302 ;kludge: Enable bank switch warning
-    if dest == WREG
-	if ISLIT(WREG_TRACKER)
-	    if BOOL2INT(bitval)
-WREG_TRACKER |= BIT(bit)
-	    else
-WREG_TRACKER &= ~BIT(bit)
-	    endif
-	else
-WREG_TRACKER = WREG_UNK
-	endif
-    endif
-    EXPAND_RESTORE
+;    EXPAND_POP
     endm
 
 
-;pseudo bit reg:
-#define STATUS_EQUALS  STATUS, Z
-
-;check reg bit:
-;stmt must be 1 opcode (due to btfxx instr)
-;    VARIABLE STMT_COUNTER = 0
-ifbit macro reg, bitnum, bitval, stmt
-    NOEXPAND  ;reduce clutter
-;    if (SRC == DEST) && ((srcbytes) == (destbytes)) && !(reverse)  ;nothing to do
-;    LOCAL BIT = bit ;kludge; force eval (avoids "missing operand" and "missing argument" errors/MPASM bugs); also helps avoid "line too long" messages (MPASM limit 200)
-    LOCAL REG = reg ;kludge; force eval (avoids "missing operand" and "missing argument" errors/MPASM bugs); also helps avoid "line too long" messages (MPASM limit 200)
-;    messg "mov8", #v(DEST), #v(SRC), #v(ISLIT(SRC)), #v(LIT2VAL(SRC))
-;    messg src, dest;
-    BANKCHK reg;
-    errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if you've set the bank select bits correctly)
-    if BOOL2INT(bitval)
-;        BANKSAFE 
-	EXPAND_RESTORE; NOEXPAND
-	btfsc reg, bitnum;
-	NOEXPAND  ;reduce clutter
-    else
-;	BANKSAFE 
-	EXPAND_RESTORE; NOEXPAND
-	btfss reg, bitnum;
-        NOEXPAND  ;reduce clutter
+#define BCF  bcf_tracker
+BCF macro reg, bitnum
+;    EXPAND_PUSH FALSE
+    ERRIF((bitnum) & ~7, [ERROR] invalid bitnum ignored: #v(bitnum) @__LINE__)
+    BANKCHK reg
+    BANKSAFE EMIT bitnum_arg(bitnum) bcf reg
+    if reg == WREG
+WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), LITERAL(WREG_TRACKER & ~BIT(bitnum)), WREG_UNKN)
     endif
-    errorlevel +302 ;kludge: Enable bank switch warning
-;    LOCAL BEFORE_STMT = $
-;STMT_ADDR#v(STMT_COUNTER) = 0-$
-    LOCAL STMT_ADDR
-STMT_ADDR = 0 - $
-    LOCAL SVWREG = WREG_TRACKER
-    EXPAND_RESTORE
-    stmt
-    NOEXPAND  ;reduce clutter
-    if WREG_TRACKER != SVWREG
-	DROP_WREG
-	messg WREG unknown here, conditional stmt might have changed it
-    endif
-;STMT_ADDR#v(STMT_COUNTER) += $
-STMT_ADDR += $
-    LOCAL STMT_INSTR = STMT_ADDR; #v(STMT_COUNTER)
-;STMT_COUNTER += 1
-;    LOCAL AFTER_STMT = 0; $ - (BEFORE_STMT + 1)
-    WARNIF STMT_INSTR != 1, [ERROR] if-ed stmt !1 opcode: #v(STMT_INSTR),; use warn to allow compile
+;    EXPAND_POP
     endm
 
-;; multi-byte pseudo opcodes (little endian): ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;    messg #v(PWM3DC), #v(PWM3DCL), #v(PWM3DCH)
+;; custom multi-byte opcodes (little endian): ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;broken (line too long)
+#define LOBYTE(val)  BYTEOF(val, 0); IIF(ISLIT(val), LITERAL((val) & 0xFF), REGLO(val))
+#define MIDBYTE(val)  BYTEOF(val, 1); IIF(ISLIT(val), LITERAL((val) >> 8 & 0xFF), REGMID(val))
+#define HIBYTE(val)  BYTEOF(val, 2); IIF(ISLIT(val), LITERAL((val) >> 16 & 0xFF), REGHI(val))
+;#define BYTEOF(val, byte)  BYTEOF_#v(ISLIT(val)) (val, byte)
+;#define BYTEOF_0(val, byte)  ((val) + (byte)); register
+;#define BYTEOF_1(val, byte)  ((val) & 0xFF << (8 * (byte))); literal
+;little endian: byte 0 = LSB
+#define BYTEOF(val, which)  IIF(ISLIT(val), BYTEOF_LIT(val, which), BYTEOF_REG(val, which))
+#define BYTEOF_LIT(val, which)  LITERAL(((val) >> (8 * (which))) & 0xFF); literal
+#define BYTEOF_REG(val, which)  REGISTER((val) + (which)); register, little endian
+
+
+;    messg #v(PWM3DC), #v(PWM3DCL), #v(PWM3DCH) @__LINE__
 #define mov16  mov_mb 16,
 #define mov24  mov_mb 24,
-mov_mb macro len, dest, src
-    NOEXPAND  ;reduce clutter
+;TODO?: mov32  mov_mb 32,
+mov_mb macro numbits, dest, src
+;    EXPAND_PUSH FALSE
+;    NOEXPAND  ;reduce clutter
 ;    if (SRC == DEST) && ((srcbytes) == (destbytes)) && !(reverse)  ;nothing to do
 ;    LOCAL SRC = src ;kludge; force eval (avoids "missing operand" and "missing argument" errors/MPASM bugs); also helps avoid "line too long" messages (MPASM limit 200)
 ;    LOCAL DEST = dest ;kludge; force eval (avoids "missing operand" and "missing argument" errors/MPASM bugs); also helps avoid "line too long" messages (MPASM limit 200)
-    LOCAL LODEST = LO(dest);
-;    messg "check HI " dest
-    LOCAL HIDEST = HI(dest);
-    if len > 16
-;        messg "check MID " dest
-	LOCAL MIDDEST = MID(dest);
-        ERRIF (HIDEST != MIDDEST+1) || (MIDDEST != LODEST+1), [ERROR] dest is not 24-bit little endian, lo@#v(LODEST) mid@#v(MIDDEST) hi@#v(HIDEST)
+    LOCAL LODEST = REGLO(dest);
+;    messg "check HI " dest @__LINE__
+    LOCAL HIDEST = REGHI(dest);
+    if numbits > 16
+;        messg "check MID " dest @__LINE__
+	LOCAL MIDDEST = REGMID(dest);
+        ERRIF((HIDEST != MIDDEST+1) || (MIDDEST != LODEST+1), [ERROR] dest is not 24-bit little endian"," lo@#v(LODEST) mid@#v(MIDDEST) hi@#v(HIDEST) @__LINE__)
     else
-;	messg #v(len), #v(LODEST), #v(LO(dest)), #v(HIDEST), #v(HI(dest))
-	ERRIF HIDEST != LODEST+1, [ERROR] dest is not 16-bit little endian: lo@#v(LODEST), hi@#v(HIDEST)
+;	messg #v(len), #v(LODEST), #v(LO(dest)), #v(HIDEST), #v(HI(dest)) @__LINE__
+	ERRIF(HIDEST != LODEST+1, [ERROR] dest is not 16-bit little endian: lo@#v(LODEST)"," hi@#v(HIDEST) @__LINE__)
     endif
     LOCAL SRC = src ;kludge; force eval (avoids "missing operand" and "missing argument" errors/MPASM bugs); also helps avoid "line too long" messages (MPASM limit 200)
     if ISLIT(SRC)  ;unpack SRC bytes
-	mov8 LO(dest), LITERAL(SRC & 0xFF)
-	if len > 16
-	    mov8 MID(dest), LITERAL(SRC >> 8 & 0xFF)
-	    mov8 HI(dest), LITERAL(SRC >> 16 & 0xFF)
+	mov8 REGLO(dest), LITERAL(SRC & 0xFF)
+	if numbits > 16
+	    mov8 REGMID(dest), LITERAL(SRC >> 8 & 0xFF)
+	    mov8 REGHI(dest), LITERAL(SRC >> 16 & 0xFF)
 	else
-	    mov8 HI(dest), LITERAL(SRC >> 8 & 0xFF)
+	    mov8 REGHI(dest), LITERAL(SRC >> 8 & 0xFF)
 	endif
     else ;register
-	LOCAL LOSRC = LO(src);
-;        messg "get HI " src
-	LOCAL HISRC = HI(src);
-	mov8 LO(dest), LO(src)
-	if len > 16
-	    LOCAL MIDSRC = MID(src);
-	    ERRIF (HISRC != MIDSRC+1) || (MIDSRC != LOSRC+1), [ERROR] src is not 24-bit little endian, lo@#v(LOSRC) mid@#v(MIDSRC) hi@#v(HISRC)
-;	    messg "get MID " src
-	    mov8 MID(dest), MID(src)
+	LOCAL LOSRC = REGLO(src);
+;        messg "get HI " src @__LINE__
+	LOCAL HISRC = REGHI(src);
+	mov8 REGLO(dest), REGLO(src)
+	if numbits > 16
+	    LOCAL MIDSRC = REGMID(src);
+	    ERRIF((HISRC != MIDSRC+1) || (MIDSRC != LOSRC+1), [ERROR] src is not 24-bit little endian"," lo@#v(LOSRC) mid@#v(MIDSRC) hi@#v(HISRC) @__LINE__)
+;	    messg "get MID " src @__LINE__
+	    mov8 REGMID(dest), REGMID(src)
 	else
-;	    messg #v(len), #v(LOSRC), #v(LO(src)), #v(HISRC), #v(HI(src))
-	    ERRIF HISRC != LOSRC+1, [ERROR] src is not 16-bit little endian: lo@#v(LOSRC), hi@#v(HISRC)
+;	    messg #v(len), #v(LOSRC), #v(LO(src)), #v(HISRC), #v(HI(src)) @__LINE__
+	    ERRIF(HISRC != LOSRC+1, [ERROR] src is not 16-bit little endian: lo@#v(LOSRC)"," hi@#v(HISRC) @__LINE__)
 	endif
-	mov8 HI(dest), HI(src)
+	mov8 REGHI(dest), REGHI(src)
     endif
-    EXPAND_RESTORE
+;    EXPAND_RESTORE
+;    EXPAND_POP
     endm
+
+
+;24-bit rotate left:
+;C bit comes into lsb
+;rlf24 macro reg
+;    rlf REGLO(reg), F
+;    rlf REGMID(reg), F
+;    rlf REGHI(reg), F
+;    endm
+
 
 ;kludge: need inner macro level to force arg expansion:
 ;#define CONCAT(lhs, rhs)  lhs#v(0)rhs
 
 ;kludge: MPASM token-pasting only occurs around #v():
-#define HI(name)  name#v(0)hi ;CONCAT(name, H)
-#define LO(name)  name ;leave LSB as-is to use as generic name ref ;CONCAT(name, L)
-    CONSTANT HI(PWM3DC) = PWM3DCH; shim
-BDCL16 macro name
-    BDCL LO(name),:2
-;    BDCL HI(name),
-    CONSTANT HI(name) = LO(name) + 1;
-;    CONSTANT name = LO(name); kludge: allow generic reference to both bytes
+#define REGHI(name)  name#v(0)hi ;CONCAT(name, H)
+#define REGLO(name)  name ;leave LSB as-is to use as generic name ref ;CONCAT(name, L)
+;    CONSTANT REGHI(PWM3DC) = PWM3DCH; shim
+b0DCL16 macro name
+;    EXPAND_PUSH FALSE
+    b0DCL REGLO(name),:2
+;    b0DCL REGHI(name),
+    EMIT CONSTANT REGHI(name) = REGLO(name) + 1;
+;    CONSTANT name = REGLO(name); kludge: allow generic reference to both bytes
+;    EXPAND_POP
     endm
 
-NBDCL16 macro name
-    NBDCL LO(name),:2
-;    NBDCL HI(name),
-    CONSTANT HI(name) = LO(name) + 1;
-;    CONSTANT name = LO(name); kludge: allow generic reference to both bytes
+nbDCL16 macro name
+;    EXPAND_PUSH FALSE
+    nbDCL REGLO(name),:2
+;    nbDCL REGHI(name),
+    EMIT CONSTANT REGHI(name) = REGLO(name) + 1;
+;    CONSTANT name = REGLO(name); kludge: allow generic reference to both bytes
+;    EXPAND_POP
     endm
 
-#define MID(name)  name#v(0)mid ;CONCAT(name, M)
-BDCL24 macro name
-    BDCL LO(name),:3
-;    BDCL MID(name),
-;    BDCL HI(name),
-    CONSTANT MID(name) = LO(name) + 1;
-    CONSTANT HI(name) = LO(name) + 2;
-;    CONSTANT name = LO(name); kludge: allow generic reference to all 3 bytes
+#define REGMID(name)  name#v(0)mid ;CONCAT(name, M)
+b0DCL24 macro name
+;    EXPAND_PUSH FALSE
+    b0DCL REGLO(name),:3
+;    b0DCL REGMID(name),
+;    b0DCL REGHI(name),
+    EMIT CONSTANT REGMID(name) = REGLO(name) + 1;
+    EMIT CONSTANT REGHI(name) = REGLO(name) + 2;
+;    CONSTANT name = REGLO(name); kludge: allow generic reference to all 3 bytes
+;    EXPAND_POP
     endm
 
-NBDCL24 macro name
-    NBDCL LO(name),:3
-;    NBDCL MID(name),
-;    NBDCL HI(name),
-    CONSTANT MID(name) = LO(name) + 1;
-    CONSTANT HI(name) = LO(name) + 2;
-;    CONSTANT name = LO(name); kludge: allow generic reference to all 3 bytes
+nbDCL24 macro name
+;    EXPAND_PUSH FALSE
+    nbDCL REGLO(name),:3
+;    nbDCL REGMID(name),
+;    nbDCL REGHI(name),
+    EMIT CONSTANT REGMID(name) = REGLO(name) + 1;
+    EMIT CONSTANT REGHI(name) = REGLO(name) + 2;
+;    CONSTANT name = REGLO(name); kludge: allow generic reference to all 3 bytes
+;    EXPAND_POP
     endm
 
 
-;#endif; //WANT_HOIST
-;    messg "hello 2"
+;    LIST_PUSH TRUE
+    CONSTANT REGHI(FSR0) = FSR0H; mov16 shim
+    CONSTANT REGHI(FSR1) = FSR1H; mov16 shim
+TOS EQU TOSL; make naming more consistent
+    CONSTANT REGHI(TOS) = TOSH; mov16 shim
+    CONSTANT REGHI(SP1BRG) = SP1BRGH; mov16 shim
+;    LIST_POP
 
-    LIST
-;; initialization ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; custom 1-bit opcodes: ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;#define SPI_TEST
+;bit operands:
+#define BIT(n)  (1 << (n)); YNBIT(1, n); //(1 << (n))
+#define REVBIT(n)  (0x80 >> (n))
+#define NOBIT(n)  0; //YNBIT(0, n); (0 << (n))
+;#define YNBIT(yesno, n)  ((yesno) << (n))
+#define XBIT(n)  NOBIT(n); don't care (safer to turn off?)
+#define LITBIT(n)  LITERAL(BIT(n))
 
-;pic-as, not mpasm: PSECT   code
-    DROP_CONTEXT ;DROP_BANK
-    ORG RESET_VECTOR
-    nop 1,; reserve space for ICE debugger?
-    goto init ;main
-    REPEAT ISR_VECTOR - $, nop 1,; fill in empty space (avoids additional programming data block?)
-;    PSECT resetVec, class="CODE", abs
-;instead use  e.g. -Wl,-presetVec=0h
-;    PSECT   MainCode, global, class = CODE, delta = 2
 
-;interrupt handler:
-;Timer 0 is used as a high res watchdog timer
-;50 usec is a long time, so timing jitter doesn't matter (okay to use interrupt)
-;NOTE: jumps to new frame handler rather than returning to interrupted code
-    DROP_CONTEXT; DROP_BANK
-    ORG ISR_VECTOR
-;    goto ws_timeout;
-;reset state for next frame:
-;ws_timeout: DROP_BANK
-    BANKCHK STKPTR;
-    errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if you've set the bank select bits correctly)
-;    BANKSAFE 
-    decf STKPTR, F; not going to RETFIE; adjust stack manually
-    errorlevel +302 ;kludge: Enable bank switch warning
-;MAIN_PROG CODE                      ; let linker place main program
-    goto rcv_frame
-;    NOLIST
+;setbit_only macro dest, bit, bitval
+;    mov8 dest, LITERAL(IIF(BOOL2INT(bitval), BIT(bit), 0)
+;    endm
+;set/clear bit:
+setbit macro dest, bit, bitval
+;    EXPAND_PUSH FALSE
+;    NOEXPAND  ;reduce clutter
+;    if (SRC == DEST) && ((srcbytes) == (destbytes)) && !(reverse)  ;nothing to do
+;    LOCAL BIT = bit ;kludge; force eval (avoids "missing operand" and "missing argument" errors/MPASM bugs); also helps avoid "line too long" messages (MPASM limit 200)
+    LOCAL DEST = dest ;kludge; force eval (avoids "missing operand" and "missing argument" errors/MPASM bugs); also helps avoid "line too long" messages (MPASM limit 200)
+;    messg "mov8", #v(DEST), #v(SRC), #v(ISLIT(SRC)), #v(LIT2VAL(SRC)) @__LINE__
+;    messg src, dest @__LINE__;
+;    BANKCHK dest;
+    LOCAL BITNUM = #v(bit)
+    if BOOL2INT(bitval)
+;        BANKSAFE bitnum_arg(BITNUM) bsf dest;, bit;
+;        EMIT bitnum_arg(BITNUM) BSF dest;, bit;
+        BSF dest, bit;
+    else
+;	BANKSAFE bitnum_arg(BITNUM) bcf dest;, bit;
+;	EMIT bitnum_arg(BITNUM) BCF dest;, bit;
+	BCF dest, bit;
+    endif
+    if dest == WREG
+;	if ISLIT(WREG_TRACKER)
+;	    if BOOL2INT(bitval)
+;WREG_TRACKER |= BIT(bit)
+;	    else
+;WREG_TRACKER &= ~BIT(bit)
+;	    endif
+;	else
+;WREG_TRACKER = WREG_UNK
+;	endif
+	if BOOL2INT(bitval)
+WREG_TRACKER = IIF(ISLIT(WREG_TRACKER, WREG_TRACKER | BIT(bit), WREG_UNKN);
+	else
+WREG_TRACKER = IIF(ISLIT(WREG_TRACKER, WREG_TRACKER & ~BIT(bit), WREG_UNKN);
+	endif
+    endif
+;    EXPAND_RESTORE
+;    EXPAND_POP
+    endm
+
+
+;single-arg variants:
+;BROKEN
+;    VARIABLE bitnum = 0;
+;    while bitnum < 8
+;biton_#v(bitnum) macro reg
+;	setbit reg, bitnum, TRUE;
+;	endm
+;bitoff_#v(bitnum) macro reg
+;	setbit reg, bitnum, FALSE;
+;	endm
+;bitnum += 1
+;    endw
+biton_#v(0) macro reg
+	setbit reg, 0, TRUE;
+	endm
+bitoff_#v(0) macro reg
+	setbit reg, 0, FALSE;
+	endm
+biton_#v(1) macro reg
+	setbit reg, 1, TRUE;
+	endm
+bitoff_#v(1) macro reg
+	setbit reg, 1, FALSE;
+	endm
+biton_#v(2) macro reg
+	setbit reg, 2, TRUE;
+	endm
+bitoff_#v(2) macro reg
+	setbit reg, 2, FALSE;
+	endm
+biton_#v(3) macro reg
+	setbit reg, 3, TRUE;
+	endm
+bitoff_#v(3) macro reg
+	setbit reg, 3, FALSE;
+	endm
+biton_#v(4) macro reg
+	setbit reg, 4, TRUE;
+	endm
+bitoff_#v(4) macro reg
+	setbit reg, 4, FALSE;
+	endm
+biton_#v(5) macro reg
+	setbit reg, 5, TRUE;
+	endm
+bitoff_#v(5) macro reg
+	setbit reg, 5, FALSE;
+	endm
+biton_#v(6) macro reg
+	setbit reg, 6, TRUE;
+	endm
+bitoff_#v(6) macro reg
+	setbit reg, 6, FALSE;
+	endm
+biton_#v(7) macro reg
+	setbit reg, 7, TRUE;
+	endm
+bitoff_#v(7) macro reg
+	setbit reg, 7, FALSE;
+	endm
+
+
+;alias for ifbit tests:
+#define EQUALS  STATUS, Z,
+#define BORROW  STATUS, C, ! ;Borrow == !Carry
+#define CARRY  STATUS, C, 
+
+
+;check reg bit:
+;stmt must be 1 opcode (due to btfxx instr)
+;doesn't emit btfxx if stmt is null, but might emit extraneous banksel
+;    VARIABLE STMT_COUNTER = 0
+ifbit macro reg, bitnum, bitval, stmt
+;    EXPAND_PUSH FALSE
+;    NOEXPAND  ;reduce clutter
+;    if (SRC == DEST) && ((srcbytes) == (destbytes)) && !(reverse)  ;nothing to do
+;    LOCAL BIT = bit ;kludge; force eval (avoids "missing operand" and "missing argument" errors/MPASM bugs); also helps avoid "line too long" messages (MPASM limit 200)
+    LOCAL REG = reg ;kludge; force eval (avoids "missing operand" and "missing argument" errors/MPASM bugs); also helps avoid "line too long" messages (MPASM limit 200)
+;    messg "mov8", #v(DEST), #v(SRC), #v(ISLIT(SRC)), #v(LIT2VAL(SRC)) @__LINE__
+;    messg src, dest @__LINE__;
+    if ISLIT(reg); compile-time check
+	if BOOL2INT(LIT2VAL(reg) & BIT(bitnum)) == BOOL2INT(bitval)
+;	    EXPAND_PUSH TRUE
+	    EMIT stmt
+;	    EXPAND_POP
+	endif
+;        EXPAND_POP
+	exitm
+    endif
+;    BANKCHK reg;
+;    if BOOL2INT(bitval)
+;	BANKSAFE bitnum_arg(bitnum) btfsc reg;, bitnum;
+;    else
+;	BANKSAFE bitnum_arg(bitnum) btfss reg;, bitnum;
+;    endif
+;;    LOCAL BEFORE_STMT = $
+;;STMT_ADDR#v(STMT_COUNTER) = 0-$
+;    LOCAL STMT_ADDR
+;STMT_INSTR = 0 - $
+;    LOCAL SVWREG = WREG_TRACKER
+;    EXPAND_RESTORE
+;    stmt
+;    NOEXPAND  ;reduce clutter
+;    if WREG_TRACKER != SVWREG
+;	DROP_WREG
+;;	messg WREG unknown here, conditional stmt might have changed it @__LINE__
+;    endif
+;;STMT_ADDR#v(STMT_COUNTER) += $
+;STMT_INSTR += $
+;;    LOCAL STMT_INSTR = STMT_ADDR; #v(STMT_COUNTER)
+;;STMT_COUNTER += 1
+;;    LOCAL AFTER_STMT = 0; $ - (BEFORE_STMT + 1)
+;    WARNIF((STMT_INSTR != 1) && !ISLIT(reg), [ERROR] if-ed stmt !1 opcode: #v(STMT_INSTR), @__LINE__); use warn to allow compile to continue
+    LOCAL NUM_IFBIT = NUM_CONTEXT; kludge: need unique symbols
+    LOCAL has_banksel = $
+    BANKCHK reg; do this before allocating fized-sized placeholder
+has_banksel -= $
+    LOCAL before_addr = $, before_bank = BANK_TRACKER;, before_wreg = WREG_TRACKER
+    CONTEXT_SAVE before_#v(NUM_IFBIT)
+    ORG before_addr + 1; leave placeholder for btf; backfill after checking for idler
+;    EXPAND_PUSH TRUE
+    EMIT stmt;
+;    EXPAND_POP
+    LOCAL after_addr = $, after_bank = BANK_TRACKER;, after_wreg = WREG_TRACKER
+    CONTEXT_SAVE after_#v(NUM_IFBIT)
+    LOCAL bank_changed = BANKOF(after_bank);
+bank_changed -= BANKOF(before_bank); line too long :(
+;    ORG before_addr
+;BANK_TRACKER = before_bank
+;WREG_TRACKER = before_wreg
+    CONTEXT_RESTORE before_#v(NUM_IFBIT)
+    if after_addr == before_addr + 1; no stmt
+	WARNIF(has_banksel, [INFO] emitted extraneous banksel (no stmt for ifbit) @__LINE__);
+    else; back-fill btf instr
+	if BOOL2INT(bitval)
+	    BANKSAFE bitnum_arg(bitnum) btfsc reg;, bitnum;
+	else
+	    BANKSAFE bitnum_arg(bitnum) btfss reg;, bitnum;
+	endif
+;	ORG after_addr
+;BANK_TRACKER = after_bank
+;WREG_TRACKER = after_wreg
+	CONTEXT_RESTORE after_#v(NUM_IFBIT)
+    endif
+;    EXPAND_POP
+NUM_IFBIT += 1; kludge: need unique labels
+    endm
+
+
+;wait for bit:
+;optimized for shortest loop
+whilebit macro reg, bitnum, bitval, idler
+;    EXPAND_PUSH FALSE
+    LOCAL loop, around
+    EMITL loop:
+    if ISLIT(reg); bit won't change; do idler forever or never
+;	ifbit reg, bitnum, bitval, idler
+	if BOOL2INT(LITVAL(reg) & BIT(bitnum)) == BOOL2INT(bitval)
+;	    EXPAND_PUSH TRUE
+	    EMIT idler
+	    GOTO loop;
+;	    EXPAND_POP
+	endif
+;        EXPAND_POP
+	exitm
+    endif
+    LOCAL NUM_WHILEBIT = NUM_CONTEXT; kludge: need unique symbols
+    BANKCHK reg; allow this to be skipped in loop
+    LOCAL before_addr = $, before_bank = BANK_TRACKER;, before_wreg = WREG_TRACKER
+    CONTEXT_SAVE before_#v(NUM_WHILEBIT)
+    ORG before_addr + 2; leave placeholder for btf + goto; backfill after checking for idler
+;    EXPAND_POP
+    EMIT idler; allows cooperative multi-tasking (optional)
+;    EXPAND_PUSH FALSE
+    LOCAL after_addr = $, after_bank = BANK_TRACKER;, after_wreg = WREG_TRACKER
+    CONTEXT_SAVE after_#v(NUM_WHILEBIT)
+    LOCAL bank_changed = BANKOF(after_bank);
+bank_changed -= BANKOF(before_bank); line too long :(
+;    EMIT ORG before_addr
+;BANK_TRACKER = before_bank
+;WREG_TRACKER = before_wreg
+    CONTEXT_RESTORE before_#v(NUM_WHILEBIT)
+    if after_addr == before_addr + 2; no idler, use tight busy-wait (3 instr)
+    	ifbit reg, bitnum, FALSE, GOTO before_addr; don't need to repeat banksel
+	ERRIF($ != before_addr + 2, [ERROR] tight-while bit test size wrong: #v($ - (before_addr + 2)) @__LINE__);
+    else; jump around idler
+	ifbit reg, bitnum, !BOOL2INT(bitval), goto around
+	ERRIF($ != before_addr + 2, [ERROR] bulky-while bit test size wrong: #v($ - (before_addr + 2)) @__LINE__);
+;	ORG after_addr
+;BANK_TRACKER = after_bank
+;WREG_TRACKER = after_wreg
+	CONTEXT_RESTORE after_#v(NUM_WHILEBIT)
+	GOTO IIF(bank_changed, before_addr, loop);
+	EMITL around:
+    endif
+;    EXPAND_POP
+    endm
+
+
+;; custom flow control opcodes ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;    LIST
 ;busy-wait functions:
@@ -1031,1386 +2799,887 @@ NBDCL24 macro name
 ;nop7_func: nop;
 ;nop6_func: nop;
 ;nop5_func: nop;
-;each level uses another stack level
-;CAUTION: each level falls thru to next
+;CAUTION: each level falls thru to next and uses another stack level
+;nop_functions macro
+;next_init macro
+;    init_chain; nop functions only need to be defined, not called; put other init first
+;    previous_init;
+;    goto around_nop
+;around_nop:
+;    endm
+;INIT_COUNT += 1
+;#undefine init_chain
+;#define init_chain  nop_functions //initialization wedge for compilers that don't support static init
+;    NOLIST
+
+
+#define NOP  nop_multi; override default opcode for PCH checking and BSR, WREG tracking
+NOP macro count;, dummy; dummy arg for usage with REPEAT
+    EXPAND_PUSH FALSE
+;    NOEXPAND; hide clutter
+    LOCAL COUNT = count
+    WARNIF(!COUNT, [WARNING] no nop? @__LINE__)
+    if COUNT & 1
+;        EXPAND_RESTORE; NOEXPAND
+;	PROGDCL 0; nop
+	EMIT nop;
+;	NOEXPAND
+COUNT -= 1
+    endif
+    if COUNT & 2
+;        EXPAND_RESTORE; NOEXPAND
+        EMIT goto $+1; 1 instr, 2 cycles (saves space)
+;	NOEXPAND
+COUNT -= 2
+    endif
+;(small) multiples of 4:
+;    if count >= 4
+    if COUNT
+;        EXPAND_RESTORE; NOEXPAND
+	EMIT call nop#v(COUNT);
+;	NOEXPAND
+    endif
+    EXPAND_POP
+    endm
+
+
+;simulate "call" opcode:
+PUSH macro addr
+;    EXPAND_PUSH FALSE
+;    BANKCHK STKPTR;
+;    BANKSAFE dest_arg(F) incf STKPTR;, F;
+    INCF STKPTR, F
+    mov16 TOS, addr; LITERAL(addr); NOTE: only h/w stack is only 15 bits wide
+;    EXPAND_POP
+    endm
+
+;simulate "return" opcode:
+POP macro
+;    EXPAND_PUSH FALSE
+;    BANKCHK STKPTR;
+;    BANKSAFE dest_arg(F) decf STKPTR;, F;
+    DECF STKPTR, F;
+;    EXPAND_POP
+    endm
+
+
+;PUSHPOP macro addr
+;    PUSH addr;
+;    POP;
+;    endm
+
+
+;PIC code pages:
+;#define PAGELEN  0x400
+#define REG_PAGELEN  0x100  ;code at this address or above is paged and needs page select bits (8 bit address)
+#define LIT_PAGELEN  0x800  ;code at this address or above is paged and needs page select bits (11 bit address)
+;line too long    CONSTANT PAGELEN = 0X400;
+;#define BANKOFS(reg)  ((reg) % BANKLEN)
+;get page# of a code address:
+;NOTE: there are 2 formats: literal (compile-time) and register-based (run-time)
+#define LITPAGEOF(addr)  ((addr) / LIT_PAGELEN)  ;used for direct addressing (thru opcode)
+#define REGPAGEOF(addr)  ((addr) / REG_PAGELEN)  ;used for indirect addressing (thru register)
+;#define PROGDCL  EMIT da; put value into prog space; use for opcodes or packed read-only data
+;
+;back-fill code page:
+;allows code to be generated < reset + isr
+;    VARIABLE CODE_COUNT = 0;
+;    VARIABLE CODE_HIGHEST = LIT_PAGELEN; start @eo page 0 and fill downwards
+;CODE_HOIST macro len
+;    if len == -1
+;        EMITO ORG CODE_ADDR#v(CODE_COUNT)
+;	exitm
+;    endif
+;    ERRIF(!len, [ERROR] code length len must be > 0, @__LINE__);
+;CODE_COUNT += 1
+;    CONSTANT CODE_ADDR#v(CODE_COUNT) = $
+;CODE_HIGHEST -= len
+;    EMITO ORG CODE_HIGHEST
+;;    messg code push: was #v(CODE_ADDR#v(CODE_COUNT)), is now #v(CODE_NEXT) @__LINE__
+;    endm
+
+;CODE_POP macro
+;    ORG CODE_ADDR#v(CODE_COUNT)
+;    endm
+ 
+
+    VARIABLE PAGE_TRACKER = ASM_MSB -1;
+    VARIABLE PAGESEL_KEEP = 0, PAGESEL_DROP = 0; ;perf stats
+#define CALL  call_pagesafe; override default opcode for PCH checking and BSR, WREG tracking
+CALL macro dest
+;    EXPAND_PUSH FALSE
+;    NOEXPAND; hide clutter
+    ERRIF(LITPAGEOF(dest), [ERROR] dest !on page 0: #v(LITPAGEOF(dest)) @__LINE__)
+;PAGESEL_DROP += 1
+;    LOCAL WREG_SAVE = WREG_TRACKER
+;    EXPAND_RESTORE; NOEXPAND
+;    messg call dest, page tracker #v(PAGE_TRACKER), need page sel? #v(LITPAGEOF(dest)) != #v(LITPAGEOF(PAGE_TRACKER))? #v(LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER))
+    if LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER)
+	EMIT CLRF PCLATH; PAGESEL dest; kludge: mpasm doesn't want to pagesel
+PAGESEL_KEEP += 1
+    else
+PAGESEL_DROP += 1
+    endif
+    EMIT call dest; PROGDCL 0x2000 | (dest); call dest
+PAGE_TRACKER = dest;
+;    NOEXPAND
+    if (dest == nop#v(4)) || (dest == nop#v(8)); these don't alter BSR or WREG
+;        EXPAND_POP
+	exitm
+    endif
+    DROP_CONTEXT; BSR and WREG unknown here
+;    if dest == choose_next_color
+;WREG_TRACKER = color; kludge: avoid unknown contents warning
+;    endif
+;#ifdef BITBANG
+;    if dest == bitbang_wreg
+;BANK_TRACKER = LATA; preserve caller context to improve timing
+;    endif
+;#endif
+;    EXPAND_POP
+    endm
+;    messg ^^^ REINSTATE, @__LINE__
+
+
+#define GOTO  goto_pagesafe; override default opcode for PCH checking
+GOTO macro dest
+;    EXPAND_PUSH FALSE
+; messg here1 @__LINE__
+    ERRIF(LITPAGEOF(dest), [ERROR] "dest" dest #v(dest) !on page 0: #v(LITPAGEOF(dest)) @__LINE__)
+; messg here2 @__LINE__
+;PAGESEL_DROP += 1
+;    messg goto dest, page tracker #v(PAGE_TRACKER), need page sel? #v(LITPAGEOF(dest)) != #v(LITPAGEOF(PAGE_TRACKER))? #v(LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER))
+    if LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER)
+	EMIT CLRF PCLATH; PAGESEL dest; kludge: mpasm doesn't want to pagesel
+PAGESEL_KEEP += 1
+    else
+PAGESEL_DROP += 1
+    endif
+;    EXPAND_RESTORE; NOEXPAND
+; messg here3 @__LINE__
+    EMIT goto dest; PROGDCL 0x2000 | (dest); call dest
+PAGE_TRACKER = dest;
+; messg here4 @__LINE__
+;    NOEXPAND
+;not needed: fall-thru would be handled by earlier code    DROP_CONTEXT; BSR and WREG unknown here if dest falls through
+;    EXPAND_POP
+    endm
+
+
+eof_#v(EOF_COUNT) macro
+    messg [INFO] page sel: #v(PAGESEL_KEEP) (#v(pct(PAGESEL_KEEP, PAGESEL_KEEP + PAGESEL_DROP))%), dropped: #v(PAGESEL_DROP) (#v(pct(PAGESEL_DROP, PAGESEL_KEEP + PAGESEL_DROP))%) @__LINE__; ;perf stats
+    messg [INFO] page0 used: #v(EOF_ADDR)/#v(LIT_PAGELEN) (#v(pct(EOF_ADDR, LIT_PAGELEN))%) @__LINE__
+    endm
+EOF_COUNT += 1;
+
+
+;special code addresses:
+#ifndef RESET_VECTOR
+ #define RESET_VECTOR  0; must be 0 for real code; shift for compile/dev debug ONLY
+#endif
+#define ISR_VECTOR  (RESET_VECTOR + 4); must be 4 for real code; shift for compile/dev debug ONLY
+;#define ISR_RESERVED  2; space to reserve for (jump from) ISR
+
+;init_#v(INIT_COUNT): DROP_CONTEXT; macro
+    init_more TRUE
+;    EXPAND_PUSH FALSE
+;NOTE: this code must be @address 0 in absolute mode
+;pic-as, not mpasm: PSECT   code
+    DROP_CONTEXT ;DROP_BANK
+    EMIT ORG RESET_VECTOR; startup
+    WARNIF($, [ERROR] reset code !@0: #v($) @__LINE__);
+    EMIT NOP 1; nop; reserve space for ICE debugger?
+;    EMIT clrf PCLATH; EMIT pagesel $; paranoid
+;    EMIT goto init_#v(INIT_COUNT + 1); init_code ;main
+    init_more FALSE
+;    messg reset pad #v(ISR_VECTOR - $) @__LINE__
+#ifdef WANT_ISR
+    REPEAT LITERAL(ISR_VECTOR - $), NOP 1; nop; fill in empty space (avoids additional programming data block?); CAUTION: use repeat nop 1 to fill
+    EMIT ORG ISR_VECTOR + WANT_ISR; ISR_RESERVED; reserve space for isr in case other opcodes are generated first
+;    CONSTANT ISR_PLACEHOLDER = $;
+#endif
+;    EXPAND_POP
+;    endm
+;INIT_COUNT += 1
+;    init_more FALSE
+
+
+;    LIST_PUSH TRUE
+;init_#v(INIT_COUNT) macro
+;    LOCAL around
+;    goto around; allow embed within init() code
+nop#v(32): call nop#v(16)
 nop#v(16): call nop#v(8)
 nop#v(8): call nop#v(4); 1 usec @8 MIPS
 nop#v(4): return; 1 usec @4 MIPS
-    NOLIST
+;    nop 1;,; 1 extra to preserve PCH
+;around:
+;    endm
+;INIT_COUNT += 1;
+;    LIST_POP
+
+;nop2if macro want_nop
+;    if want_nop
+;	nop2
+;    endif
+;    endm
+
+;nop4if macro want_nop
+;    EXPAND_PUSH FALSE
+;    if want_nop
+;	EMIT NOP 4;,
+;    endif
+;    EXPAND_POP
+;    endm
 
 
-;pin assignments:
-;- RA0 is WS debug output stream
-;- RA1, 2, 5, 4 are WS output channels
-;- RA3 is WS input stream
-;peripherals used as follows:
-;- Timer 0 generates interrupt for next frame after 50 usec WS idle time
-;- Timer 1 gate mode measures WS input pulse width for decoding WS signal
-;- Timer 2 used as PWM clock to generate first part of WS debug output stream
-;- MSSP used to generate remaining part of WS debug output stream
-;- CLC1-3 redirects WS input to other pins (channels)
-;- CLC4 combines PWM and MSSP into WS debug output stream
-;- to Timer1 gate to decode WS input data
-#define WSINCH  RA3
-#define DEBOUT  RA0
-#define CH1OUT  RA1
-#define CH2OUT  RA2
-#define CH3OUT  RA5 ;TODO: use PPS to put channel 3 on RA3? (RA3 might be hard-wired for input-only)
-#define CH4OUT  RA4
+;VERY ugly kludge to help MPASM get back on track:
+;this macro is needed because of page/bank optimization and the assembler's inability to handle that
+;use this macro ahead of a label that gets an error 116 "Address label duplicated or different in second pass"
+;there appear to be 2 main causes for this: pass 1 vs. pass 2 addresses out of sync, and LOCAL identifier name clashes
+;the NEXT_UNIQID variable addresses the second of those causes, while this macro addresses the first one
+;this macro can be used to pad out the address during pass 1, skipping it during pass 2 (or vice versa), so that the address is consistent between pass 1 + 2
+;it's best to use it within dead code chunks (ie, AFTER a goto), where the extra instructions will NEVER be executed; this avoids any run-time overhead
+;I'm not sure why symbolic addresses occassionally get out of alignment between pass 1 and pass 2; it's inconsistent - sometimes the assembler recovers correctly and sometimes not
+;usage of this macro is trial and error; only add it in one place at a time, and adjust it until the error 116 goes away (use the .LST file to check the addresses in pass 1 vs. 2)
+;if pass 1 address (LST) is higher than pass 2 address (symtab), use a +ve offset; this will put nop's in the final executable code
+;if pass 1 address (LST) is less than pass 2 (symtab), use a -ve offset; this will only generate nop's in pass 1, and won't actually take up any code space in pass 2
+;params:
+; pass2ofs = amount to adjust; if pass 2 address > pass 1 address, use pass2ofs > 0; else use pass2ofs < 0; there can be errors in either direction
+    VARIABLE PASS1_FIXUPS = 0, PASS2_FIXUPS = 0  ;used to track macro perf stats
+UGLY_PASS12FIX MACRO pass2ofs
+;    EXPAND_PUSH FALSE
+;    NOEXPAND; reduce clutter
+;    EXPAND_PUSH FALSE
+    if (pass2ofs) < 0; slide pass 2 addresses down (pad pass 1 address up, actually)
+	if !eof; only true during pass 1 (assembler hasn't resolved the address yet); eof label MUST be at end
+	    REPEAT -(pass2ofs), nop; insert dummy instructions to move address during pass 1; these won't be present during pass 2
+	endif
+;		WARNIF eof, "[WARNING] Unneeded pass 1 fixup", pass2ofs, eof  ;won't ever see this message (output discarded during pass 1)
+PASS1_FIXUPS += 0x10000-(pass2ofs)  ;lower word = #prog words; upper word = #times called
+    endif
+    if (pass2ofs) > 0; slide pass 2 addresses up
+	if eof; only true during pass 2 (address resolved); eof label MUST be at end
+	    REPEAT pass2ofs, nop;
+	endif
+	WARNIF(!eof, [WARNING] Unneeded #v(pass2ofs) pass 2 fixup @__LINE__)
+PASS2_FIXUPS += 0x10000+(pass2ofs)  ;lower word = #prog words; upper word = #times called
+    endif
+;    EXPAND_POP
+;    EXPAND_POP
+    ENDM
 
-    CONSTANT PPS_#v(DEBOUT) = RA0PPS;
-    CONSTANT PPS_#v(CH1OUT) = RA1PPS;
-    CONSTANT PPS_#v(CH2OUT) = RA2PPS;
-    CONSTANT PPS_#v(CH3OUT) = RA5PPS;
-    CONSTANT PPS_#v(CH4OUT) = RA4PPS;
+eof_#v(EOF_COUNT) macro
+    messg [INFO] Ugly fixups pass1: #v(PASS1_FIXUPS/0x10000):#v(PASS1_FIXUPS%0x10000), pass2: #v(PASS2_FIXUPS/0x10000):#v(PASS2_FIXUPS%0x10000) @__LINE__
+    endm
+EOF_COUNT += 1;
 
-
-;initialize I/O pins:
-;#define NO_PPS  0
-iopin_init macro
-    mov8 ANSELA, LITERAL(0); //all digital; CAUTION: do this before pin I/O
-    mov8 WPUA, LITBIT(WSINCH); ;0x08; //weak pull-up on input pins in case not connected (ignored if MCLRE configured)
-#if 0
-    messg are these needed?
-    mov8 ODCONA, LITERAL(0); push-pull outputs
-    mov8 INLVLA, LITERAL(~0 & 0xff); shmitt trigger input levels;  = 0x3F;
-    mov8 SLRCONA, LITERAL(~BIT(WSINCH) & 0xff); on = 25 nsec slew, off = 5 nsec slew; = 0x37;
+    EXPAND_POP
+    LIST_POP
+    messg end of hoist 1 @__LINE__
+;#else; too deep :(
 #endif
-    mov8 LATA, LITERAL(0); //start low to prevent junk on line
-    mov8 TRISA, LITBIT(WSINCH); //0x00); //all pins are output exc RA3
-;?    REPEAT RA5 - RA0 + 1, mov8 RA0PPS + repeater, LITERAL(NO_PPS); reset to LATA; is this needed? (datasheet says undefined at startup)
-#if 0
-    messg REMOVE THIS
-    setbit LATA, CH2OUT, TRUE
-;    mov8 WREG, LITERAL(1 << 4);
-;    BANKSAFE xorwf LATA, F
-    goto $-1
-#endif
-;    mov8 TRISA, LITERAL(0);
+#if HOIST == 0
+    messg hoist 0: generic pic/asm helpers @__LINE__
+;#define LIST  NOLIST; too much .LST clutter, turn off for this section; also works for nested .inc file
+;#define NOLIST  LIST; show everything in .LST clutter
+    NOLIST; don't show this section in .LST file
+    NOEXPAND
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; generic PIC/ASM helpers ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;bool macros:
+#define TRUE  1
+#define FALSE  0
+#define BOOL2INT(val)  ((val) != 0); MPASM evaluates this to 0 or 1
+;#define XOR(lrs, rhs)  ((lhs) && (rhs) || !(lhs) && !(rhs))
+;for text messages:
+#define YESNO(val)  YESNO_#v(BOOL2INT(val))
+;broken:#define YESNO_#v(TRUE)  true
+#define YESNO_1  true
+;broken:#define YESNO_#v(FALSE)  false
+#define YESNO_0  false
+;ternary operator (like C/C++ "?:" operator):
+;helps with compile-time optimizations
+;line too long: #define IIF(TF, tval, fval)  (BOOL2INT(TF) * (tval) + (!BOOL2INT(TF)) * (fval))
+;only eval TF once, but requires shorter fval (with no side effects):
+#define IIF(TF, tval, fval)  (BOOL2INT(TF) * ((tval) - (fval)) + (fval))
+
+
+;misc arithmetic helpers:
+#define rdiv(num, den)  (((num)+(den)/2)/MAX(den, 1))  ;rounded divide (at compile-time)
+;#define divup(num, den)  (((num)+(den)-1)/(den))  ;round-up divide
+#define pct(num, den)  rdiv(100 * (num), den)
+;#define err_rate(ideal, actual)  ((d'100'*(ideal)-d'100'*(actual))/(ideal))  ;%error
+;#define mhz(freq)  #v((freq)/ONE_SECOND)MHz  ;used for text messages
+;#define kbaud(freq)  #v((freq)/1000)kb  ;used for text messages
+;#define sgn(x)  IIF((x) < 0, -1, (x) != 0)  ;-1/0/+1
+;#define abs(x)  IIF((x) < 0, -(x), x)  ;absolute value
+#define MIN(x, y)  IIF((x) < (y), x, y)  ;use upper case so it won't match text within ERRIF/WARNIF messages
+#define MAX(x, y)  IIF((x) > (y), x, y)  ;use upper case so it won't match text within ERRIF/WARNIF messages
+
+#define NULL_STMT  ORG $; dummy stmt for macros that need a parameter
+
+
+;error/debug assertion message macros:
+;******************************************************************************
+;show error message if condition is true:
+;params:
+; assert = condition that must (not) be true
+; message = message to display if condition is true (values can be embedded using #v)
+;    messg [TODO] change to #def to preserve line# @__LINE__
+;ERRIF MACRO assert, message, args
+;    NOEXPAND  ;hide clutter
+;    if assert
+;	error message, args
+;    endif
+;    EXPAND_RESTORE
+;    ENDM
+;use #def to preserve line#:
+;#define ERRIF(assert, msg, args)  \
+;    if assert \
+;	error msg, args  \
+;    endif
+;mpasm doesn't allow #def to span lines :(
+;#define ERRIF(assert, msg, args)  ERRIF_#v(BOOL2INT(assert)) msg, args
+#define ERRIF(assert, msg)  ERRIF_#v(BOOL2INT(assert)) msg
+#define ERRIF_0  IGNORE_EOL; msg_ignore, args_ignore  ;IGNORE_EOL; no ouput
+#define ERRIF_1  error; (msg, args)  error msg, args
+;show warning message if condition is true:
+;params:
+; assert = condition that must (not) be true
+; message = message to display if condition is true (values can be embedded using #v)
+;    messg [TODO] change to #def to preserve line# @__LINE__
+;WARNIF MACRO assert, message, args
+;    NOEXPAND  ;hide clutter
+;    if assert
+;	messg message, args
+;    endif
+;    EXPAND_RESTORE
+;    ENDM
+;use #def to preserve line#:
+;#define WARNIF(assert, msg, args)  \
+;    if assert \
+;	messg msg, args \
+;    endif
+;mpasm doesn't allow #def to span lines :(
+;#define WARNIF(assert, msg, args)  WARNIF_#v(BOOL2INT(assert)) msg, args
+#define WARNIF(assert, msg)  WARNIF_#v(BOOL2INT(assert)) msg
+#define WARNIF_0  IGNORE_EOL; (msg_ignore, args_ignore)  ;IGNORE_EOL; no output
+#define WARNIF_1  messg; (msg, args)  messg msg, args
+
+
+;#define COMMENT(thing) ; kludge: MPASM doesn't have in-line comments, so use macro instead
+
+;ignore remainder of line (2 args):
+;    messg TODO: replace? IGNEOL @__LINE__
+;IGNORE_EOL2 macro arg1, arg2
+;    endm
+IGNORE_EOL macro arg
     endm
 
 
-;set clock freq:
-;    CONSTANT CLKDIV = (FOSC_CFG / PWM_FREQ); CLK_FREQ / HFINTOSC_FREQ);
-;#define HFINTOSC_NOSC  b'110' ;use OSCFRQ; 0; no change (use cfg); should be in p16f15313.inc
-#define USE_HFFRQ  b'110'; should be in p16f15313.inc
-;#define PWM_FREQ  (16 MHz); (FOSC_CFG / 2); need PWM freq 16 MHz because max speed is Timer2 / 2 and Timer2 max speed is FOSC/4
-;#define FOSC_FREQ  PWM_FREQ; FOSC needs to run at least as fast as needed by PWM
-#define FOSC_FREQ  (32 MHz); (16 MHz); FOSC needs to be a multiple of WS half-bit time; use 4 MIPS to allow bit-banging (DEBUG ONLY)
-;    CONSTANT MY_OSCCON = USE_HFFRQ << NOSC0 | 0 << NDIV0; (log2(CLKDIV) << NDIV0 | HFINTOSC_NOSC << NOSC0);
-;    messg [INFO] FOSC #v(FOSC_CFG), PWM freq #v(PWM_FREQ);, CLK DIV #v(CLKDIV) => my OSCCON #v(MY_OSCCON)
-;    messg [INFO], Fosc #v(FOSC_FREQ) == 4 MIPS? #v(FOSC_FREQ == 4 MIPS), WS bit freq #v(WSBIT_FREQ), #instr/wsbit #v(FOSC_FREQ/4 / WSBIT_FREQ)
-clk_init macro
-;    mov8 OSCCON1, LITERAL(b'110' << NOSC0 | b'0000' << NDIV0
-;RSTOSC in CONFIG1 tells HFFRQ to default to 32 MHz, use 2:1 div for 16 MHz:
-    setbit OSCCON3, CSWHOLD, FALSE; use new clock as soon as stable (should be immediate if HFFRQ !changed)
-    mov8 OSCCON1, LITERAL(USE_HFFRQ << NOSC0 | 0 << NDIV0); MY_OSCCON); 1:1
-    mov8 OSCFRQ, LITERAL(HFFRQ#v(FOSC_FREQ));
-;    ERRIF CLK_FREQ != 32 MHz, [ERROR] need to set OSCCON1, clk freq #v(CLK_FREQ) != 32 MHz
-;CAUTION: assume osc freq !change, just divider, so new oscillator is ready immediately
-;;    ifbit PIR1, CSWIF, FALSE, goto $-1; wait for clock switch to complete
-;    ifbit OSCCON3, ORDY, FALSE, goto $-1; wait for clock switch to complete
-#if 0; check timing: toggle R2 @1Hz
- #define WANT_BUSYWAIT
-    messg REMOVE THIS
-hbloop: DROP_CONTEXT; DROP_BANK
-    setbit LATA, CH2OUT, TRUE;
-    call wait_1sec
-    setbit LATA, CH2OUT, FALSE;
-    call wait_1sec;
-    goto hbloop
-#endif
+;#define WARNIF_1x(lineno, assert, msg, args)  WARNIF_1x_#v(BOOL2INT(assert)) lineno, msg, args
+;kludge: MPASM doesn't provide __LINE__ so use current addr ($) instead:
+;#define WARNIF_1x(assert, msg, args)  WARNIF_1x_#v(BOOL2INT(assert)) $, msg, args
+;#define WARNIF_1x_0  IGNORE_EOL2; (msg_ignore, args_ignore)  ;IGNORE_EOL; no output
+;#define WARNIF_1x_1  messg1x; (msg, args)  messg msg, args
+
+;show msg 1x only per location:
+;kludge: use addr since there's no way to get caller's line#
+;TODO: figure out a better way to get lineno
+;    VARIABLE NUM_MESSG1X = 0
+;messg1x macro lineno, msg, args
+;    EXPAND_PUSH FALSE
+;    LOCAL already = 0
+;    while already < NUM_MESSG1X
+;	if WARNED_#v(already) == lineno
+;	    EXPAND_POP
+;	    exitm
+;	endif
+;already += 1
+;    endw
+;    messg msg, args @#v(lineno)
+;    CONSTANT WARNED_#v(NUM_MESSG1X) = lineno
+;NUM_MESSG1X += 1
+;    EXPAND_POP
+;    endm
+
+
+;add to init code chain:
+    VARIABLE INIT_COUNT = 0;
+    VARIABLE LAST_INIT = -1;
+init_more macro onoff
+    EXPAND_PUSH FALSE
+    if BOOL2INT(onoff) && INIT_COUNT; (LAST_INIT != -1); add to previous init code
+;	LOCAL next_init = $
+;	CONTEXT_SAVE before_init
+;	ORG LAST_INIT; reclaim or backfill placeholder space
+;	CONTEXT_RESTORE after_init
+	if $ != LAST_INIT; IIF(LITPAGEOF(PAGE_TRACKER), $ + 2, $ + 1); LAST_INIT + 1; jump to next block
+PAGE_TRACKER = LAST_INIT; kludge: PCLATH had to be correct in order to get there
+	    CONTEXT_SAVE next_init_#v(INIT_COUNT)
+	    CONTEXT_RESTORE last_init_#v(INIT_COUNT - 1)
+	    GOTO init_#v(INIT_COUNT); next_init
+;	    ORG next_init
+	    CONTEXT_RESTORE next_init_#v(INIT_COUNT)
+	    EMITL init_#v(INIT_COUNT):
+	endif
+;init_#v(INIT_COUNT): DROP_CONTEXT; macro
+    else; end of init code (for now)
+	CONTEXT_SAVE last_init_#v(INIT_COUNT)
+	ORG IIF(LITPAGEOF(PAGE_TRACKER), $ + 2, $ + 1); leave placeholder for jump to next init section in case needed
+LAST_INIT = $
+;    EMIT goto init_#v(INIT_COUNT + 1); daisy chain: create next thread; CAUTION: use goto - change STKPTR here
+INIT_COUNT += 1; 
+    endif
+    EXPAND_POP
     endm
 
 
-;#ifdef WANT_BUSYWAIT
-#if 0
-    messg REMOVE busy wait 1 sec
-    LIST
-;busy-wait (for dev/test ONLY):
-;CAUTION: stack depth grows with longer delay period
-wait_64usec: call wait_32usec; 16 instr; fall thru + return second time
-wait_32usec: call wait_16usec; 16 instr; fall thru + return second time
-wait_16usec: call wait_8usec; 16 instr; fall thru + return second time
-wait_8usec: call wait_4usec; 16 instr; fall thru + return second time
-wait_4usec: call wait_2usec; 16 instr; fall thru + return second time
-wait_2usec: call wait_1usec; 8 instr; fall thru + return second time
-wait_1usec:
-#if FOSC_FREQ == 8 MIPS ;need one extra level for 8 MIPS
-    call wait_500nsec;
-wait_500nsec:
+;add to eof code chain:
+    VARIABLE EOF_COUNT = 0;
+;#define at_eof  REPEAT LITERAL(EOF_COUNT), EMITL at_eof_#v(REPEATER): eof_#v(REPEATER)
+at_eof macro
+;    EXPAND_PUSH FALSE
+;;broken:    REPEAT EOF_COUNT, eof_#v(repeater)
+;broken:    REPEAT LITERAL(EOF_COUNT), EMITL at_eof_#v(REPEATER): eof_#v(REPEATER)
+    LOCAL count = 0;
+    while count < EOF_COUNT
+        EMITL at_eof_#v(count):; only used for debug
+	eof_#v(count)
+count += 1;
+    endw
+;    EXPAND_POP
+    endm
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;macro expansion control:
+;push/pop current directive, then set new value (max 31 nested levels)
+;allows clutter to be removed from the .LST file
+    VARIABLE MEXPAND_STACK = TRUE; default is ON (for caller, set at eof in this file)
+;use this if more than 32 levels needed:
+;    VARIABLE MEXPAND_STACKHI = 0, MEXPAND_STACKLO = 1; default is ON (for caller, set at eof in this file)
+    VARIABLE MEXPAND_DEPTH = 0, MEXPAND_DEEPEST = 0
+#define EXPAND_PUSH  EXPAND_CTL
+#define EXPAND_POP  EXPAND_CTL -1
+#define EXPAND_RESTORE  EXPAND_CTL 0xf00d
+EXPAND_CTL MACRO onoffpop
+    NOEXPAND; hide clutter in LST file
+;    if (onoffpop) == 0xf00d; restore current setting
+    if (onoffpop) >= 0; push on/off
+	LOCAL pushpop = (MEXPAND_STACK + MEXPAND_STACK) / 2;
+;	    if pushpop != MEXPAND_STACK; & ASM_MSB
+;		messg [ERROR] macro expand stack too deep: #v(MEXPAND_DEPTH) @__LINE__; allow continuation (!error)
+;	    endif
+	WARNIF(pushpop != MEXPAND_STACK, [ERROR] macro expand stack too deep: #v(MEXPAND_DEPTH) @__LINE__); allow continuation (!error)
+MEXPAND_STACK += MEXPAND_STACK + BOOL2INT(onoffpop); push: shift + add new value
+MEXPAND_DEPTH += 1; keep track of current nesting level
+MEXPAND_DEEPEST = MAX(MEXPAND_DEEPEST, MEXPAND_DEPTH); keep track of high-water mark
+;use this if more than 32 levels needed:
+;MEXPAND_STACKHI *= 2
+;	if MEXPAND_STACKLO & ASM_MSB
+;MEXPAND_STACKHI += 1
+;MEXPAND_STACKLO &= ~ASM_MSB
+;	endif
+;    if !(onoff) ;leave it off
+	if onoffpop
+	    LIST; _PUSH pushpop; NOTE: must be on in order to see macro expansion
+	endif
+    else; pop or restore
+        if (onoffpop) == -1; pop
+;    LOCAL EXP_NEST = nesting -1  ;optional param; defaults to -1 if not passed
+MEXPAND_STACK >>= 1; pop previous value (shift right)
+MEXPAND_DEPTH -= 1; keep track of current nesting level
+;only needed if reach 16 levels:
+;	if MEXPAND_STACKLO & ASM_MSB  ;< 0
+;MEXPAND_STACKLO &= ~ASM_MSB  ;1-MEXPAND_STACKLO  ;make correction for assembler sign-extend
+;	endif
+;use this if more than 32 levels needed:
+;	if MEXPAND_STACKHI & 1
+;MEXPAND_STACKLO += ASM_MSB
+;	endif
+;MEXPAND_STACKHI /= 2
+;errif does this:
+;	if !(MEXPAND_STACKLO & 1)  ;pop, leave off
+;		EXITM
+;	endif
+;	    if MEXPAND_DEPTH < 0
+;		messg [ERROR] macro expand stack underflow @__LINE__; allow continuation (!error)
+;	    endif
+	    WARNIF(MEXPAND_DEPTH < 0, [ERROR] macro expand stack underflow @__LINE__); allow continuation (!error)
+;	    LIST_POP
+	    if !(LSTCTL_STACK & 1)
+		NOLIST
+	    endif
+	endif
+    endif
+    if !(MEXPAND_STACK & 1); leave it off
+	exitm
+    endif
+    EXPAND; turn expand back on
+    ENDM
+
+eof_#v(EOF_COUNT) macro
+    LOCAL nested = 1; kludge: account for at_eof wrapper
+    WARNIF(MEXPAND_DEPTH != nested, [WARNING] macro expand stack not empty @eof: #v(MEXPAND_DEPTH - nested)"," stack = #v(MEXPAND_STACK) @__LINE__); mismatched directives can cause incorrect code gen
+    endm
+EOF_COUNT += 1;
+
+
+;listing control:
+;push/pop current directive, then set new value (max 31 nested levels)
+;allows clutter to be removed from the .LST file
+    VARIABLE LSTCTL_STACK = FALSE; default is OFF (for caller, set at eof in this file)
+    VARIABLE LSTCTL_DEPTH = 0, LSTCTL_DEEPEST = 0
+#define LIST_PUSH  LISTCTL
+#define LIST_POP  LISTCTL -1
+#define LIST_RESTORE  LISTCTL 0xfeed
+LISTCTL MACRO onoffpop
+    EXPAND_PUSH FALSE; hide clutter in LST file
+;    if (onoffpop) == 0xfeed; restore current setting
+    if (onoffpop) >= 0; push on/off
+;	    messg list push @__LINE__
+	LOCAL pushpop = (LSTCTL_STACK + LSTCTL_STACK) / 2;
+	WARNIF(pushpop != LSTCTL_STACK, [ERROR] list control stack too deep: #v(LSTCTL_DEPTH)"," @__LINE__); allow continuation (!error)
+LSTCTL_STACK += LSTCTL_STACK + BOOL2INT(onoffpop); push new value
+LSTCTL_DEPTH += 1; keep track of current nesting level
+LSTCTL_DEEPEST = MAX(LSTCTL_DEEPEST, LSTCTL_DEPTH); keep track of high-water mark
+    else; pop or restore
+        if (onoffpop) == -1; pop
+;	    messg list pop @__LINE__
+LSTCTL_STACK >>= 1; pop previous value (shift right)
+LSTCTL_DEPTH -= 1; keep track of current nesting level
+	    WARNIF(LSTCTL_DEPTH < 0, [ERROR] list control stack underflow @__LINE__); allow continuation (!error)
+        endif
+    endif
+    if LSTCTL_STACK & 1; turn it on
+	LIST
+    else; turn it off
+	NOLIST
+    endif
+    EXPAND_POP
+    ENDM
+
+eof_#v(EOF_COUNT) macro
+    WARNIF(LSTCTL_DEPTH, [WARNING] list expand stack not empty @eof: #v(LSTCTL_DEPTH)"," stack = #v(LSTCTL_STACK) @__LINE__); mismatched directives can cause incorrect code gen
+    endm
+EOF_COUNT += 1;
+
+
+;show stmt in LST file even if LIST/EXPAND are off:
+;used mainly for opcodes
+;#define EMITD  LSTLINE_#v(0); initial state
+;#define EMITO  LSTLINE_#v(0); initial state
+;#define LSTLINE_0; leave as-is (off/on as handled by LST_CONTROL)
+;#define MEXPAND_#v(mALL); leave as-is (all off/on handled by MEXPAND)
+;LSTLINE_#v(TRUE) macro expr; turn expand on+off to show item in .LST
+; messg here1 @__LINE__
+EMIT macro stmt
+    EXPAND_PUSH TRUE; show expanded opc/data
+    stmt
+    EXPAND_POP
+    endm
+
+;left-justified version of above (for stmt with label):
+EMITL macro stmt
+    EXPAND_PUSH TRUE; show expanded opc/data
+stmt
+    EXPAND_POP
+    endm
+
+
+#if 0; LST control tests
+    LIST_PUSH TRUE
+    messg hello 1 @__LINE__
+    LIST_PUSH FALSE
+    messg hello 0 @__LINE__
+    LIST_POP
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+test_expand macro aa, bb
+;    EXPAND_PUSH FALSE
+    LOCAL cc;broken = aa + bb
+    EMITL cc = aa + bb
+;  messg "cc" = cc @__LINE__
+    LOCAL dd = 1
+    test_nested aa, bb, cc
+    if cc < 0 
+	EMIT movlw 0-cc & 0xff
+    else
+        EMIT movlw cc & 0xff
+    endif
+    movlw b'10101'
+;    EXPAND_POP
+    endm
+test_nested macro arg1, arg2, arg3
+    EXPAND_PUSH TRUE
+;  messg "arg1" = arg1, "arg2" = arg2, "arg3" = arg3 @__LINE__
+    EMIT LOCAL ARG1 = arg1
+    LOCAL ARG2 = arg2
+    EXPAND_POP
+    EMIT addlw arg1
+    sublw arg2
+    endm
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+#define RESET_VECTOR  60; kludge:allow compile
+    test_expand 1, 2; 7cc
+    LIST_PUSH FALSE
+    test_expand 3, 4; 7cc
+    LIST_POP
+    LIST_POP
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+#endif; text
+
+
+;vararg kludge:
+;MPASM doesn't handle var args, so use wrappers :(
+;#define _ARG(argg)  witharg_#v(argg)
+#define bitnum_arg(argg)  withbit_#v(argg)
+#define dest_arg(argg)  withdest_#v(argg)
+#define val_arg(argg) showarg_#v(argg)
+;yet-another-kludge: add instances as needed:
+;add variants specifically for dest F/W:
+;helps to recognize purpose in assembly/debug
+dest_arg(W) macro stmt
+    stmt, W;
+    endm
+; messg here @__LINE__
+;broken dest_arg(F) macro stmt
+     messg TODO: fix this ^^^ vvv
+withdest_1 macro stmt
+    stmt, F;
+    endm
+;kludge-kludge: pre-generate wrappers for small values (bit# args):
+#if 0; broken :(
+    VARIABLE bitnum = 0;
+    while bitnum < 8
+bitnum_arg(bitnum) macro stmt
+	stmt, bitnum;
+	endm
+bitnum += 1;
+    endw
 #else
-    ERRIF FOSC_FREQ != 4 MIPS, [TODO] unhandled FOSC: #v(FOSC_FREQ), use 4 or 8 MIPS
+bitnum_arg(0) macro stmt
+    stmt, 0;
+    endm
+bitnum_arg(1) macro stmt
+    stmt, 1;
+    endm
+bitnum_arg(2) macro stmt
+    stmt, 2
+    endm
+bitnum_arg(3) macro stmt
+    stmt, 3
+    endm
+bitnum_arg(4) macro stmt
+    stmt, 4
+    endm
+bitnum_arg(5) macro stmt
+    stmt, 5
+    endm
+bitnum_arg(6) macro stmt
+    stmt, 6
+    endm
+bitnum_arg(7) macro stmt
+    stmt, 7
+    endm
 #endif
-    return; 4 instr call+return @4 MIPS == 1 usec
-;    BDCL idleL
-wait_1msec: DROP_CONTEXT; DROP_BANK
-    nop;
-    mov8 WREG, LITERAL(1000/4 - 1);
-    goto loop_4usec+1
-loop_4usec: DROP_CONTEXT; DROP_BANK
-    call wait_1usec;
-    call wait_2usec;
-    nop;
-;    BANKSAFE 
-    decfsz WREG, F
-    goto loop_4usec
-    return
-    NOLIST
-
-;kludge: eat dummy arg
-;(MPASM doesn't allow optional args)
-wrapper1 macro stmt, ignore
+;expand arg value then throw away (mainly for debug):
+val_arg(0) macro stmt
     stmt
     endm
-
-;    NBDCL onesec,
-;wait_halfsec: DROP_CONTEXT;
-;    mov8 onesec, LITERAL(500 / 2);
-;loop_halfsec: DROP_CONTEXT; DROP_BANK
-;    REPEAT 2, wrapper1 call wait_1msec, NOARG;
-;    decfsz onesec, F
-;    goto loop_halfsec;
-;    return;
-;    NOLIST
-;
-;wait_qtrsec: DROP_CONTEXT;
-;    mov8 onesec, LITERAL(250);
-;loop_1sec: DROP_CONTEXT; DROP_BANK
-;    call wait_1msec;
-;    decfsz onesec, F
-;    goto loop_1sec;
-;    return;
-;    NOLIST
-;
-;wait_1sec: DROP_CONTEXT; DROP_BANK
-;    mov8 onesec, LITERAL(1000 / 4);
-;loop_1sec: DROP_CONTEXT; DROP_BANK
-;    REPEAT 4, wrapper1 call wait_1msec, NOARG;
-;    decfsz onesec, F
-;    goto loop_1sec;
-;    return;
-#endif; WANT_BUSYWAIT
-
-
-;disable unused peripherals:
-;saves a little power, helps prevent accidental interactions
-#define ENABLED(n)  NOBIT(n); all peripherals are ON by default
-#define DISABLED(n)  BIT(n)
-pmd_init macro
-;?    mov8 ODCONA, LITERAL(0); //all push-pull out (default), no open drain
-;?    mov8 SLRCONA, LITERAL(~BIT(RA3)); //0x37); //limit slew rate, all output pins 25 ns vs 5 ns
-;?    mov8 INLVLA, LITERAL(~BIT(RA3)); //0x3F); //TTL input levels on all input pins
-;??    mov8 RA4PPS, LITERAL(0x01);   ;RA4->CLC1:CLC1OUT;    
-;??    mov8 RA5PPS, LITERAL(0x01);   ;RA5->CLC1:CLC1OUT;    
-;??    mov8 RA1PPS, LITERAL(0x01);   ;RA1->CLC1:CLC1OUT;    
-;??    mov8 RA2PPS, LITERAL(0x01);   ;RA2->CLC1:CLC1OUT;    
-;??    mov8 RA0PPS, LITERAL(0x16);   ;RA0->MSSP1:SDO1;    
-;    setbit PMD0, FVRMD, DISABLED;
-;    setbit PMD0, NVMMD, DISABLED;
-;    setbit PMD0, CLKRMD, DISABLED;
-;    setbit PMD0, IOCMD, DISABLED;
-    mov8 PMD0, LITERAL(ENABLED(SYSCMD) | DISABLED(FVRMD) | DISABLED(NVMMD) | DISABLED(CLKRMD) | DISABLED(IOCMD)); keep sys clock, disable FVR, NVM, CLKR, IOC
-;    setbit PMD1, NCOMD, DISABLED;
-    mov8 PMD1, LITERAL(DISABLED(NCOMD) | ENABLED(TMR2MD) | ENABLED(TMR1MD) | ENABLED(TMR0MD)); disable NCO, enabled Timer 0 - 2
-;    setbit PMD2, DAC1MD, DISABLED;
-;    setbit PMD2, ADCMD, DISABLED;
-;    setbit PMD2, CMP1MD, DISABLED;
-;    setbit PMD2, ZCDMD, DISABLED;
-    mov8 PMD2, LITERAL(DISABLED(DAC1MD) | DISABLED(ADCMD) | DISABLED(CMP1MD) | DISABLED(ZCDMD)); disable DAC1, ADC, CMP1, ZCD
-;    setbit PMD3, PWM6MD, DISABLED;
-;    setbit PMD3, PWM5MD, DISABLED;
-;    setbit PMD3, PWM4MD, DISABLED;
-;    setbit PMD3, CCP2MD, DISABLED;
-;    setbit PMD3, CCP1MD, DISABLED;
-    mov8 PMD3, LITERAL(DISABLED(PWM6MD) | DISABLED(PWM5MD) | DISABLED(PWM4MD) | ENABLED(PWM3MD) | DISABLED(CCP2MD) | DISABLED(CCP1MD)); enable PWM 3, disable PWM 4 - 6, CCP 1 - 2
-;    setbit PMD4, UART1MD, DISABLED;
-;    setbit PMD4, CWG1MD, DISABLED;
-    mov8 PMD4, LITERAL(DISABLED(UART1MD) | ENABLED(MSSP1MD) | DISABLED(CWG1MD)); disable EUSART1, CWG1, enable MSSP1
-;    setbit PMD5, CLC4MD, DISABLED; IIFDEBUG(ENABLED, DISABLED);
-;    setbit PMD5, CLC3MD, DISABLED;
-;    mov8 PMD5, LITERAL(DISABLED(CLC4MD) | DISABLED(CLC3MD) | ENABLED(CLC2MD) | ENABLED(CLC1MD)); disable CLC 3, 4, enable CLC 1, 2
-    mov8 PMD5, LITERAL(ENABLED(CLC4MD) | ENABLED(CLC3MD) | ENABLED(CLC2MD) | ENABLED(CLC1MD)); disable CLC 3, 4, enable CLC 1, 2
-    endm
-
-
-;redirect WS input stream to another output pin:
-;;;kludge: RA3 not directly available to Timer 1, route via CLC1-3 out:
-;;;need to redirect RA3 to output channels 1 - 4 anyway
-#define LC1MODE_4AND  b'010'; should be in p16f15313.inc
-#define LCIN3PPS  3; should be in p16f15313.inc
-#define LCIN_TMR0  12; should be in p16f15313.inc
-#define PPS_PWM3OUT  H'0B'; should be in p16f15313.inc
-;#define LCINFOSC  4; sim/test only
-#define PPS_CLC1OUT  1; should be in p16f15313.inc
-#define PPS_CLC2OUT  2; should be in p16f15313.inc
-#define PPS_CLC3OUT  3; should be in p16f15313.inc
-#define INVERT(n)  BIT(n)
-#define NONINVERT(n)  NOBIT(n)
-;NOTE: control bits are the same for each CLC; only need to use #v(clc) when they are different (register names)
-chout_init macro clc
-    if clc == 1
-        mov8 CLCIN3PPS, LITERAL(WSINCH); CAUTION: CLCIN0PPS not available to CLCxSELy? use CLCIN3PPS instead
-    endif
-;CLCIN0 defaults to RA3?; leave it as-is
-;    messg ^^^ is this needed?
-;3 CLCs are used so WS signal can be directed onto 3 separate output channels:
-    mov8 CLC#v(clc)CON, LITERAL(NOBIT(LC1EN) | NOBIT(LC1INTP) | NOBIT(LC1INTN) | LC1MODE_4AND << LC1MODE0); disable during config, no int, 4-way AND
-;    setbit CLC1CON, LC1EN, FALSE; datasheet says to disable CLC during setup
-;??is this default?    mov8 CLCIN0PPS, LITERAL(WSINCH); CAUTION: CLCIN0PPS not available to CLCxSELy? (datasheet omission might be incorrect though)
-;CLC4 pass-thru example from AN1451 (data 2 in gate 2 -> RC4):
-;    CLC4GLS0 = 0; CLC4GLS1 = 8; CLC4GLS2 = 0; CLC4GLS3 = 0;
-;    CLC4SEL0 = 0; CLC4SEL1 = 0;
-;    CLC4POL = 0xD;
-;    CLC4CON = 0xC2;
-;    REPEAT 4, mov8 CLC4SEL0 + repeater, LITERAL(NO_PPS); set later
-;don't care?    REPEAT 3, mov8 CLC1SEL0 + repeater, LITERAL(NO_PPS);
-;CAUTION: CLCIN0PPS not available to CLCxSELy?  use CLCIN3 instead
-    mov8 CLC#v(clc)SEL0, LITERAL(LCIN3PPS); LCIN_TMR0); LCIN_FOSC); input selection
-;    REPEAT 4, mov8 CLC#v(clc)SEL0 + repeater, LITERAL(LCIN3PPS); LCIN_TMR0); LCIN_FOSC); input selection
-;    mov8 CLC1SEL0, LITERAL(LCIN_TMR0); LCINFOSC); (WSINCH);
-;    messg REMOVE ^^^
-;    REPEAT 4, mov8 CLC4GLS0 + repeater, LITERAL(0xAA); all data gated, !inverted
-;    mov8 CLC1GLS0, LITERAL(BIT(LC1G1D4T)); Gate 4 Data 4 True (!inverted) routed into CLC1 Gate 4
-;    REPEAT 3, mov8 CLC1GLS1 + repeater, LITERAL(0); gate 0 - 3 data !routed
-;    mov8 CLC1POL, LITERAL(NOBIT(LC1POL) | BIT(LC1G4POL) | BIT(LC1G3POL) | BIT(LC1G2POL) | NOBIT(LC1G1POL)); !inverted output, unused inputs inverted
-;do unused inputs need to be set?  for safety, set them all the same:
-;NOTE: data gating !defined @startup; need to set all 4 data sel reg here?
-;    REPEAT 4, mov8 CLC1GLS0 + repeater, LITERAL(0); no inputs routed => constant 0
-;    mov8 CLC1GLS0, LITERAL(BIT(LC1G1D4T)); CLCIN3 routed to gate 0 data 1
-;#if 1
-    REPEAT 4, mov8 CLC#v(clc)GLS0 + repeater, LITERAL(IIF(repeater, 0, BIT(LC1G1D1T))); no inputs routed => constant 0; CLCIN3 routed to gate 0 data 1
-    mov8 CLC#v(clc)POL, LITERAL(NONINVERT(LC1POL) | INVERT(LC1G4POL) | INVERT(LC1G3POL) | INVERT(LC1G2POL) | NONINVERT(LC1G1POL)); !inverted output, unused inputs inverted
-;#else
-;    REPEAT 4, mov8 CLC#v(clc)GLS0 + repeater, LITERAL(BIT(LC1G1D1T)); no inputs routed => constant 0; CLCIN3 routed to gate 0 data 1
-;    mov8 CLC#v(clc)POL, LITERAL(NONINVERT(LC1POL) | NONINVERT(LC1G4POL) | NONINVERT(LC1G3POL) | NONINVERT(LC1G2POL) | NONINVERT(LC1G1POL)); !inverted output, unused inputs inverted
-;    messg REINSTATE
-;#endif
-    setbit CLC#v(clc)CON, LC1EN, TRUE;
-;#ifdef WANT_DEBUG
-;    messg [DEBUG] sending CLC1 out (WS in) to RA2
-;    mov8 RA2PPS, LITERAL(PPS_CLC1OUT);
-;    messg sending PWM3 to RA5
-;    mov8 RA5PPS, LITERAL(PPS_PWM3OUT);
-;#endif
-    endm
-
-
-;Timer 0:
-;used to detect 50 usec WS281X reset pulse
-;WDT period is not short enough, so use T0 as pseudo-WDT; ISR handles timeout
-#define T0SRC_FOSC4  b'010'; FOSC / 4; should be in p16f15313.inc
-#define T0_prescaler(freq)  log2(FOSC_FREQ / 4 / (freq)); (1 MHz)); set pre-scalar for 1 usec ticks
-#define T0_prescfreq(prescaler)  (FOSC_FREQ / 4 / BIT(prescaler)); (1 MHz)); set pre-scalar for 1 usec ticks
-;    messg ^^ REINSTATE
-#define T0_postscale  log2(1); 1-to-1 post-scalar
-    CONSTANT MAX_T0PRESCALER = 15;
-#define T0_ROLLOVER  50; 50 ticks @1 usec = 50 usec; WS281X latch time = 50 usec
-;    messg [DEBUG] T0 prescaler = #v(T0_prescale), should be 2 (1:4)
-ws_clrwdt macro int_occurred
-    mov8 TMR0L, LITERAL(0); restart 50 usec count-down; caller should restart whenever data received
-    if int_occurred
-        setbit PIR0, TMR0IF, FALSE; clear previous interrupt
-        setbit INTCON, GIE, TRUE; (re-)enable interrupts
-    endif
-    endm
-#define MY_T0CON1(tick_freq)  (T0SRC_FOSC4 << T0CS0 | NOBIT(T0ASYNC) | T0_prescaler(tick_freq) << T0CKPS0); FOSC / 4, sync, pre-scalar TBD (1:1 for now)
-tmr0_init macro
-    mov8 T0CON0, LITERAL(NOBIT(T0EN) | NOBIT(T016BIT) | T0_postscale << T0OUTPS0); Timer 0 disabled during config, 8 bit mode, 1:1 post-scalar
-;    mov8 T0CON1, LITERAL(MY_T0CON1(1 MHz)); T0SRC_FOSC4 << T0CS0 | NOBIT(T0ASYNC) | T0_prescale << T0CKPS0); FOSC / 4, sync, 8:1 pre-scalar
-;    mov8 TMR0H, LITERAL(T0_ROLLOVER); int takes 1 extra tick but this accounts for a few instr at start of ISR
-;;    mov8 TMR0L, LITERAL(0)
-;later    ws_clrwdt FALSE; prevent premature interrupt; ensure first WS reset occurs at correct time
-;    setbit T0CON0, T0EN, TRUE;
-    wait_usec 50, ORG $-1; goto tmr0_init_done; setup but don't wait
-;tmr0_init_done: DROP_CONTEXT
-    setbit PIE0, TMR0IE, TRUE;
-    endm
-
-
-;general purpose delay routines:
-;use idler for cooperative multi-tasking
-wait_sec macro sec, idler
-    wait_msec sec * 1000, idler
-    endm
-
-wait_msec macro msec, idler
-    wait_usec msec * 1000, idler
-    endm
-
-;CAUTION: these are mainly for debug/test/animation; they assume WS input stream !active
-    VARIABLE WAIT_COUNT = 1; generate unique labels
-;    CONSTANT MAX_ACCURACY = 1 << 20; 1 MHz; max accuracy to give caller; use nop for < 1 usec delays
-wait_usec macro interval_usec, idler
-    LOCAL USEC = interval_usec;
-;    setbit INTCON, GIE, FALSE; disable interrupts (in case waiting for 50 usec WS latch signal)
-;    if usec == 1
-;    movlw ~(b'1111' << T0CKPS0) & 0xFF; prescaler bits
-;    BANKCHK T0CON1
-;    andwf T0CON1, F; strip previous prescaler
-    setbit T0CON0, T0EN, FALSE;
-    mov8 TMR0L, LITERAL(0); restart count-down with new limit
-;    LOCAL ACCURACY = MAX_ACCURACY; 1 MHz; max accuracy to give caller; use nop for < 1 usec delays
-    LOCAL PRESCALER = 3;
-    LOCAL T0tick, LIMIT, ROLLOVER;
-    LOCAL FREQ_FIXUP; = FOSC_FREQ / 4 / BIT(PRESCALER);
-;    while ACCURACY >= 1 << 7; 125 Hz
-    while PRESCALER <= MAX_T0PRESCALER; use smallest prescaler for best accuracy
-;T0FREQ = FOSC_FREQ / 4 / BIT(PRESCALER); T0_prescfreq(PRESCALER);
-T0tick = BIT(PRESCALER) KHz / (FOSC_FREQ / (4 KHz)); split 1M factor to avoid arith overflow; BIT(PRESCALER - 3); usec
-;presc 1<<3, freq 1 MHz, period 1 usec, max delay 256 * usec
-;presc 1<<5, freq 250 KHz, period 4 usec, max delay 256 * 4 usec ~= 1 msec
-;presc 1<<8, freq 31250 Hz, period 32 usec, max delay 256 * 32 usec ~= 8 msec
-;presc 1<<13, freq 976.6 Hz, period 1.024 msec, max delay 256 * 1.024 msec ~= .25 sec
-;presc 1<<15, freq 244.1 Hz, period 4.096 msec, max delay 256 * 4.096 msec ~= 1 sec
-LIMIT = 256 * T0tick; (1 MHz / T0FREQ); BIT(PRESCALER - 3); 32 MHz / (FOSC_FREQ / 4); MAX_ACCURACY / ACCURACY
-;	messg [DEBUG] wait #v(interval_usec) usec: prescaler #v(PRESCALER) => limit #v(LIMIT)
-;        messg tick #v(T0tick), presc #v(PRESCALER), max delay #v(LIMIT) usec
-	if interval_usec <= LIMIT; this prescaler allows interval to be reached
-ROLLOVER = rdiv(interval_usec, T0tick); 1 MHz / T0FREQ); / BIT(PRESCALER - 3)
-	    messg [DEBUG] wait #v(interval_usec) usec: prescaler #v(PRESCALER), t0tick #v(T0tick), max #v(LIMIT), actual #v(ROLLOVER * T0tick), rollover #v(ROLLOVER)
-;    messg log 2: #v(FOSC_FREQ / 4) / #v(FOSC_FREQ / 4 / BIT(PRESCALER)) = #v(FOSC_FREQ / 4 / (FOSC_FREQ / 4 / BIT(PRESCALER))); (1 MHz)); set pre-scalar for 1 usec ticks
-FREQ_FIXUP = 1 MHz / T0tick; T0FREQ;
-;	    if T0FREQ * BIT(PRESCALER) != FOSC_FREQ / 4; account for rounding errors
-	    if T0tick * FREQ_FIXUP != 1 MHz; account for rounding errors
-;	        messg freq fixup: equate #v(FOSC_FREQ / 4 / MAX(FREQ_FIXUP, 1)) to #v(BIT(PRESCALER)) for t0freq #v(FREQ_FIXUP) fixup
-		CONSTANT log2(FOSC_FREQ / 4 / MAX(FREQ_FIXUP, 1)) = PRESCALER; kludge: apply prescaler to effective freq
-	    endif
-	    mov8 T0CON1, LITERAL(MY_T0CON1(MAX(FREQ_FIXUP, 1))); FREQ_FIXUP)); FOSC_FREQ / 4 / BIT(PRESCALER)));
-	    mov8 TMR0H, LITERAL(ROLLOVER - 1); (usec) / (MAX_ACCURACY / ACCURACY) - 1);
-	    setbit T0CON0, T0EN, TRUE;
-	    setbit PIR0, TMR0IF, FALSE; clear previous interrupt
-wait_loop#v(WAIT_COUNT):
-WAIT_COUNT += 1
-	    idler;
-	    if $ < wait_loop#v(WAIT_COUNT - 1); reg setup only; caller doesn't want to wait
-		ORG wait_loop#v(WAIT_COUNT - 1)
-		exitm
-	    endif
-;assume idler handles BSR + WREG tracking; not needed:
-;	    if $ > wait_loop#v(WAIT_COUNT - 1)
-;		DROP_CONTEXT; TODO: idler hints; for now assume idler changed BSR or WREG
-;	    endif
-	    ifbit PIR0, TMR0IF, FALSE, goto wait_loop#v(WAIT_COUNT - 1); wait for timer roll-over
-;ACCURACY = 1 KHz; break out of loop	    exitwhile
-;    if usec >= 256
-;	movlw ~(b'1111' << T0CKPS0) & 0xFF; prescaler bits
-;	BANKCHK T0CON1
-;	andwf T0CON1, F; strip temp prescaler
-;	iorwf T0CON1, T0_prescale << T0CKPS0; restore original 8:1 pre-scalar used for WS input timeout
-;    endif
-;    mov8 TMR0H, LITERAL(T0_ROLLOVER); restoreint takes 1 extra tick but this accounts for a few instr at start of ISR
-	    exitm
-	endif
-PRESCALER += 1
-;FREQ_FIXUP = IIF(FREQ_FIXUP == 31250, 16000, FREQ_FIXUP / 2);
-    endw
-    error [ERROR] wait #v(interval_usec) usec exceeds max #v(LIMIT), suitable prescaler !found
-;    if usec <= 256
-;;	iorwf T0CON1, T0_prescale << T0CKPS0; restore original 8:1 pre-scalar used for WS input timeout
-;        mov8 T0CON1, LITERAL(MY_T0CON1(1 MHz));
-;        mov8 TMR0H, LITERAL(usec - 1);
-;    else
-;	if usec <= 1 M; 1 sec
-;            mov8 T0CON1, LITERAL(MY_T0CON1(250 Hz));
-;	    mov8 TMR0H, LITERAL((usec) / (1 KHz) - 1);
-;	else
-;	    if usec <= 256 K
-;		mov8 T0CON1, LITERAL(MY_T0CON1(1 KHz));
-;		mov8 TMR0H, LITERAL((usec) / (1 KHz) - 1);
-;	    else
-;	    endif
-;	endif
-;    endif
-    endm
-
-
-;start acq:
-tmr1_acq macro
-    setbit T1GCON, T1GGO, TRUE;
-    ifbit PIR5, TMR1GIF, FALSE, goto $-1
-    endm
-;Timer 1 gate init (used to capture WS281X input bit):
-;see AN1473 for details about Single-Pulse mode
-#define T1SRC_FOSC  b'10'; should be in p16f15313.inc
-#define T1_prescale  log2(1) ;(0 << T1CKPS0); 1-to-1 pre-scalar
-;#define T1GSS_LC1OUT  (b'01101' << T1GSS0); kludge: RA3 not directly available, route via CLC1 out
-#define WSBIT_THRESHOLD  8; 16 osc ticks @16 MHz = 0.5 usec
-;#define LC1MODE_4AND  (b'010' << LC1MODE0)
-;#define T1GPPS_PPS  0; should be in p16f15313.inc
-#define T1GATE_LC1OUT  b'01101'; LC1_out should be in p16f15313.inc
-;#define LCIN_FOSC  4
-;#define LCIN_TMR0  12
-;#define LCIN3PPS  3
-;#define PPSOUT_CLC1OUT  1
-tmr1_init macro
-;    bsf T1CON, TMR1ON;
-;    mov8 T1GPPS, LITERAL(WSINCH); T1GSS_LC1OUT);
-    mov8 T1CON, LITERAL(NOBIT(TMR1ON) | T1_prescale << T1CKPS0 | XBIT(T1SYNC) | BIT(T1RD16)); Timer 1 disabled during config, 1:1 prescalar, 16 bit read, sync ignored
-    mov8 T1GCON, LITERAL(BIT(T1GE) | BIT(T1GSPM) | BIT(T1GPOL) | NOBIT(T1GTM) | NOBIT(T1GGO)); Gate Single-Pulse mode, active high, no toggle, don't acquire yet
-    mov8 T1CLK, LITERAL(T1SRC_FOSC); 32 MHz (32 nsec reslution)
-    mov8 T1GATE, LITERAL(T1GATE_LC1OUT); RA3 goes in to CLC1 so use it here; T1GPPS_PPS); =T1GPPS;
-    setbit T1CON, TMR1ON, TRUE;
-#if 1
-;kludge: RA3 not directly available to Timer 1, route via CLC1 out:
-;need to redirect RA3 to output channels 1 - 4 anyway
-    mov8 CLCIN3PPS, LITERAL(WSINCH); CAUTION: CLCIN0PPS not available to CLCxSEL0?
-;CLC4 pass-thru example from AN1451 (data 2 in gate 2 -> RC4):
-;    CLC4GLS0 = 0; CLC4GLS1 = 8; CLC4GLS2 = 0; CLC4GLS3 = 0;
-;    CLC4SEL0 = 0; CLC4SEL1 = 0;
-;    CLC4POL = 0xD;
-;    CLC4CON = 0xC2;
-;    REPEAT 4, mov8 CLC4SEL0 + repeater, LITERAL(NO_PPS); set later
-;    REPEAT 3, mov8 CLC1SEL0 + repeater, LITERAL(0); NO_PPS);
-;    mov8 CLC1SEL3, LITERAL(LCIN_TMR0); LCIN_FOSC); (LCIN3PPS); input selection
-    mov8 CLC1SEL3, LITERAL(LCIN3PPS); input selection
-;    messg REINSTATE ^^^
-;    REPEAT 4, mov8 CLC4GLS0 + repeater, LITERAL(0xAA); all data gated, !inverted
-;    REPEAT 3, mov8 CLC1GLS0 + repeater, LITERAL(0); gate 0 - 3 data !routed
-;    mov8 CLC1GLS3, LITERAL(BIT(LC1G4D4T)); Gate 4 Data 4 True (!inverted) routed into CLC1 Gate 4
-    REPEAT 4, mov8 CLC1GLS0 + repeater, LITERAL(IIF(repeater == 3, BIT(LC1G4D4T), 0)); gate 0 - 3 data !routed
-    mov8 CLC1POL, LITERAL(NOBIT(LC1POL) | NOBIT(LC1G4POL) | BIT(LC1G3POL) | BIT(LC1G2POL) | BIT(LC1G1POL)); !inverted output, unused inputs inverted
-    mov8 CLC1CON, LITERAL(BIT(LC1EN) | NOBIT(LC1INTP) | NOBIT(LC1INTN) | LC1MODE_4AND); enable, no int, 4-way AND
-;#ifdef WANT_DEBUG
-;    messg sending CLC1 out (WS in) to RA4
-;    mov8 RA4PPS, LITERAL(PPS_CLC1OUT);
-;#endif
-#endif
-    endm
-
-
-;set up Timer2 to run at 2x WS freq (SPI sync uses T2/2):
-;see https://microchipdeveloper.com/8bit:10bitpwm
-#define T2SRC_FOSC4  b'001'; FOSC / 4 (required by PWM); should be in p16f15313.inc
-;#define T2SRC_FOSC  b'0010'; run Timer2 at same speed as Fosc (16 MHz)
-#define T2_prescale  log2(1) ;(0 << T2CKPS0); 1-to-1 pre-scalar
-#define T2_postscale  log2(1) ;(0 << T2OUTPS0); 1-to-1 post-scalar
-#define T2_FREERUNNING  0; should be in p16f15313.inc
-;#define PWM_FREQ  (16 MHz); (FOSC_CFG / 2); need PWM freq 16 MHz because max speed is Timer2 / 2 and Timer2 max speed is FOSC
-#define PR2VAL  (FOSC_FREQ / 4 / WSBIT_FREQ); 8 MIPS / 800 KHz == 10; 4 MIPS / 800 KHz == 5
-#define PR2VAL_2x  (PR2VAL / 2); run T2 @ 2x SPI freq (only option for SPI sync with T2+PWM)
-;#define DUTY  (4 * PR2VAL * 3/16); 3/16 of 1.25 usec =~ 0.25 usec; NO: 3/10 of 1.25 usec == .375 usec ~= 6/16 pwm duty
-;    messg [INFO] TMR2 period #v(PR2VAL - 1) = PR2VAL - 1, PWM3 duty #v(DUTY) = DUTY
-    messg [INFO] Fosc = #v(mhz(FOSC_FREQ)) M Hz, 4 MIPS? #v(FOSC_FREQ == 4 MIPS), 8 MIPS? #v(FOSC_FREQ == 8 MIPS)
-    messg [INFO] WS bit freq = #v(khz(WSBIT_FREQ)) K Hz, #instr/wsbit bit-bang = #v(FOSC_FREQ/4 / WSBIT_FREQ)
-    messg [INFO] TMR2 prval 2x = #v(PR2VAL_2x), pr2val 1x = #v(PR2VAL) = PR2VAL
-tmr2_init macro
-;    mov8 PWM3CON, LITERAL(NOBIT(PWM3EN) | NOBIT(PWM3POL)); disabled during config, active high
-;;    mov8 PWM3DCH, LITERAL(DUTY >> 2); 8 msb
-;;    mov8 PWM3DCL, LITERAL((DUTY & 3) << 6); 2 lsb
-;    mov16 PWM3DC, LITERAL(DUTY << 6); 10 msb of 16-bit value
-;    setbit PWM3CON, PWM3EN, TRUE;
-    mov8 T2CON, LITERAL(NOBIT(T2ON) | T2_prescale << T2CKPS0 | T2_postscale << T2OUTPS0); disable Timer 2 during config, 1:1 pre- and post- scalars
-    mov8 T2PR, LITERAL(PR2VAL_2x - 1); 8 MIPS / 10 = 800 KHz; gives 4 bits res?
-    mov8 T2CLKCON, LITERAL(T2SRC_FOSC4 << T2CS0); 16 MHz/4 = 4 MHz
-;#define T2MODE  (b'00' << T2MODE0)
-    mov8 T2HLT, LITERAL(BIT(PSYNC) | NOBIT(CKPOL) | BIT(CKSYNC) | T2_FREERUNNING << T2MODE0); sync to FOSC/4, rising edge, ON sync, free-running
-;    mov8 T2RST, LITERAL(0); no need to reset???
-    mov8 TMR2, LITERAL(0); start with clean cycle
-    setbit T2CON, T2ON, TRUE;
-    endm
-
-
-;generate WS debout output via SPI using Timer 2, PWM, MSSP, using CLC to combine them:
-;see AN1606 for details about custom SPI peripheral using CLC + Timer2 + PWM + MSSP (CAUTION: AN1606 is half-speed)
-;see https://deepbluembedded.com/spi-tutorial-with-pic-microcontrollers/
-;don't see https://ww1.microchip.com/downloads/en/Appnotes/TB3192-Using-the-SPI-Module-on-8-Bit-PIC-MCUs-90003192A.pdf
-;NO #define SPI_FOSC4  0; use FOSC/4 (8 MHz); should be in p16f15313.inc
-#define SPI_T2HALF  b'0011'; use TMR2/2 (SPI must be synced to PWM on T2); should be in p16f15313.inc
-;#define CLC1OUT  1; should be in p16f15313.inc
-#define PPS_CLC4OUT  4; should be in p16f15313.inc
-#define LC4MODE_ANDOR  0; should be in p16f15313.inc
-;#define LCIN3PPS  3; should be in p16f15313.inc
-#define LCIN_PWM3  b'010001'; should be in p16f15313.inc
-#define LCIN_SDO  b'100010'; should be in p16f15313.inc
-#define LCIN_SCK  b'100011'; should be in p16f15313.inc
-;#define PPS_PWM3OUT  H'0B'; should be in p16f15313.inc
-;;#define LCINFOSC  4; sim/test only
-;#define PPSOUT_CLC1OUT  1; should be in p16f15313.inc
-#define DUTY  (4 * PR2VAL_2x * 1/3); (PRVAL/2 * 1/4); rdiv(PRVAL * 3, 2 * 16); (PR2VAL/2 * 3/16); 3/16 of 1.25 usec =~ 0.25 usec; NO: 3/10 of 1.25 usec == .375 usec ~= 6/16 pwm duty
-;    messg [INFO] TMR2 period #v(PR2VAL - 1) = PR2VAL - 1, PWM3 duty #v(DUTY) = DUTY
-    messg [INFO] PWM3 duty #v(DUTY) = DUTY
-;    messg [INFO], Fosc #v(FOSC_FREQ) == 4 MIPS? #v(FOSC_FREQ == 4 MIPS), WS bit freq #v(WSBIT_FREQ), #instr/wsbit #v(FOSC_FREQ/4 / WSBIT_FREQ), TMR2 period #v(PR2VAL - 1) = PR2VAL - 1
-spi_init macro
-    tmr2_init;
-    mov8 PWM3CON, LITERAL(NOBIT(PWM3EN) | NOBIT(PWM3POL)); disabled during config, active high
-;    mov8 PWM3DCH, LITERAL(DUTY >> 2); 8 msb
-;    mov8 PWM3DCL, LITERAL((DUTY & 3) << 6); 2 lsb
-    mov16 PWM3DC, LITERAL(DUTY << 6); 10 msb of 16-bit value
-    setbit PWM3CON, PWM3EN, TRUE;
-;MSSP used for SPI out of WS data (debug):
-;not used    mov8 SSP1CLKPPS, LITERAL(16);
-    setbit PIR3, SSP1IF, TRUE; kludge: pretend last byte was sent so send won't wait
-    mov8 SSP1CON1, LITERAL(NOBIT(SSPEN) | NOBIT(WCOL) | NOBIT(SSPOV) | NOBIT(CKP) | SPI_T2HALF << SSPM0); MSSP disable during config, no collision, no overflow, clock active high, SPI master @ T2/2 (needs to be synced with PWM)
-    mov8 SSP1STAT, LITERAL(NOBIT(SMP) | BIT(CKE)); SPI master mode, xmit on rising clock edge, sample at middle
-    messg [TODO] CKE? need SDO stable when SCK is active/high
-;#define SPI_TMR2_half  (b'0011' << SSPM0); use Timer2/2
-    mov8 SSP1ADD, LITERAL(PR2VAL_2x - 1); SPI baud rate: 800KHz (1.25 usec) with 16MHz osc (4 MIPS, 0.25 usec) = 5
-;    mov8, RA0PPS
-;    mov8 CLCIN0PPS, LITERAL(RA3); //0x03);   ;RA3->CLC1:CLCIN0;
-    setbit SSP1CON1, SSPEN, TRUE;
-;use CLC4 to combine start + data bit parts into complete WS signal:
-    mov8 PPS_#v(DEBOUT), LITERAL(PPS_CLC4OUT); send WS signal to channel 0 (RA0)
-    mov8 CLC4CON, LITERAL(NOBIT(LC4EN) | NOBIT(LC1INTP) | NOBIT(LC2INTN) | LC4MODE_ANDOR << LC4MODE0); disable during config, no int, AND-OR
-    mov8 CLC4SEL0, LITERAL(LCIN_SCK);
-    mov8 CLC4SEL1, LITERAL(LCIN_SDO);
- ;messg are ^^^ these correct?
-    mov8 CLC4SEL2, LITERAL(LCIN_PWM3);
-;    mov8 CLC2SEL3, LITERAL(0);
-    mov8 CLC4GLS0, LITERAL(BIT(LC4G1D1T)); SCK; | BIT(LC2G1D2T)); SCK & SDO
-    mov8 CLC4GLS1, LITERAL(BIT(LC4G2D2T)); SDO; | BIT(LC2G2D2N) | BIT(LC2G2D3T)); SCK & !SDO & PWM3
-    mov8 CLC4GLS2, LITERAL(BIT(LC4G3D1T)); SCK; | BIT(LC2G1D2T)); SCK & SDO
-    mov8 CLC4GLS3, LITERAL(BIT(LC4G4D2T) | BIT(LC4G4D3N)); SDO + !PWM3; | BIT(LC2G2D3T)); SCK & !SDO & PWM3
-;#define INVERT(n)  BIT(n)
-;#define NONINV(n)  NOBIT(n)
-    mov8 CLC4POL, LITERAL(NONINVERT(LC4POL) | NONINVERT(LC4G1POL) | NONINVERT(LC4G2POL) | NONINVERT(LC4G3POL) | INVERT(LC4G4POL)); combine parts into complete WS signal
-    setbit CLC4CON, LC4EN, TRUE;
-    endm
-
-;wait for previous byte to finish sending (to avoid collision):
-;spi_wait_byte macro
-;    ifbit SSP1STAT, BF, FALSE, goto $-1; avoid collision; wait for previous byte to finish
-;    endm
-;send 8 bits of data (WREG) via SPI:
-;send_spi_byte: DROP_BANK
-spi_waitif macro want_wait
-;        ifbit SSP1STAT, BF, FALSE, goto $-1; avoid collision; wait for previous byte to finish
-    if want_wait
-        ifbit PIR3, SSP1IF, FALSE, goto $-1; wait for SPI xmit complete
-	setbit PIR3, SSP1IF, FALSE;
-    endif
-    endm
-
-;use custom SPI peripheral to send next byte of WS281X data:
-;optional wait before/after each byte
-;synchronous send takes 10 usec, async is 1-2 instr (0.25-0.5 usec)
-#ifdef BITBANG
-    messg [INFO] SPI using bit-bang with busy-wait, DEV/DEBUG ONLY!
-;kludge: parameterless wrappers (for use with ifbit):
-spitbit_#v(0) macro
-; messg [DEBUG] bsr @spitbit_0: #v(BANK_TRACKER)
-    setbit LATA, RA5, 0
-    endm
-spitbit_#v(1) macro
-; messg [DEBUG] bsr @spitbit_1: #v(BANK_TRACKER)
-    setbit LATA, RA5, 1
-    endm
-;bitbang next WS byte:
-    LIST
-bitbang_wreg: DROP_CONTEXT
-BANK_TRACKER = LATA; preserve caller context to improve timing
-    ERRIF FOSC_FREQ != 8 MIPS, [TODO] not 8 mips: #v(mhz(FOSC_FREQ)) m hz,
-    LOCAL bit = 7
- messg [DEBUG] bsr @st of bitbang_wreg: #v(BANK_TRACKER), LATA #v(LATA)
-    while BIT(bit)
-        spitbit_#v(1); setbit LATA, RA5, 1; NOTE: 1 extra instr (banksel) precedes first bit
-;	nop
-;	setbit LATA, RA5, data
-        ifbit WREG, bit, FALSE, spitbit_#v(0); bitlow ;goto onbit#v(bit)
-	nop 2,
-	spitbit_#v(0); setbit LATA, RA5, 0
-	nop4if bit; !needed on lst bit: return+call takes 4 instr cycle
-bit -= 1
-    endw
-    return;
-    NOLIST
-#else
-    messg [INFO] SPI using CLC+MSSP+PWM+TMR2
-#endif
-spi_send_byte macro byte, want_wait
-;    BANKCHK SSP1STAT
-;    BANKSAFE btfss SSP1STAT, BF; wait for (previous) byte to be sent
-#ifdef BITBANG
-;WS "0" = 10000 (1+4), "1" = 11100 (3+2) @4MIPS
-    WARNIF want_wait <= 0, [WARNING] bit-bang is synchronous, wait want_wait ignored
-;    LOCAL BYTE = byte
-;    if !ISLIT(BYTE)
-;	messg [INFO] WS timing not exact here
-;    endif
-;    LOCAL bit = 0x80
-;    while bit
-;        if ISLIT(BYTE)
-;#if FOSC_FREQ == 8 MIPS
-;	    setbit LATA, RA5, 1
-;	    if (byte) & bit
-;	        nop4
-;	        setbit LATA, RA5, 0
-;	        nop4
-;	    else
-;	        nop
-;	        setbit LATA, RA5, 0
-;	        nop7
-;	    endif
-;#else
-;	    ERRIF FOSC_FREQ != 4 MIPS, [TODO] not 4 mips: #v(FOSC_FREQ)
-;	    setbit LATA, RA5, 1
-;	    nop2if (byte) & bit
-;	    setbit LATA, RA5, 0
-;	    nop2if !((byte) & bit)
-;	    nop
-;#endif
-;	else; isreg
-;;	    error [TODO] run-time bit-banging
-;	    ifbit byte, bit, TRUE, goto onbit
-;	    setbit LATA, RA5, 1
-;	    setbit LATA, RA5, 0
-;	    nop
-;	    goto nextbit
-;onbit:
-;	    setbit LATA, RA5, 1
-;	    nop2
-;	    setbit LATA, RA5, 0
-;	    nop
-;nextbit:
-;	endif
-;bit /= 2
+;BROKEN:
+;    EXPAND
+;    VARIABLE small_arg = 0
+;    while small_arg < 8
+;;bitnum_arg(small_arg) macro stmt
+;    messg #v(small_arg), witharg#v(small_arg) @__LINE__
+;witharg#v(small_arg) macro stmt
+;    messg witharg#v(small_arg) stmt, #v(small_arg) @__LINE__
+;        stmt, #v(small_arg); CAUTION: force eval of small_arg here
+;	endm
+;small_arg += 1
 ;    endw
-    mov8 WREG, byte; NOTE: this strecthes active low trailer 1-2 instr cycle
-    BANKCHK LATA
-    call bitbang_wreg;
-;BANK_TRACKER = LATA
-#else
-    spi_waitif want_wait < 0; wait BEFORE send
-    mov8 SSP1BUF, byte;
-    spi_waitif (want_wait > 0); || (want_wait == ASM_MSB); wait AFTER send
-#endif
-;?    mov8 WREG, SSP1BUF; read dummy byte to clear buf status and avoid collision flag
-;    return
-    endm
-
-;ZCD initialization for phase-angle dimming:
-zcd_init macro
-    messg TODO: add ZCD for AC phase angle dimming ~pixel2things
-    endm
+;    NOEXPAND
 
 
-#if 0
-#define CLCIN_FOSC  4; should be in p16f15313.inc
-#define PPSOUT_TMR0  12; should be in p16f15313.inc
-#define PPSOUT_CLC4OUT  4; should be in p16f15313.inc
-devtest_init macro
-#ifdef WANT_DEBUG; show TMR0IF on RA0, RA4
-    mov8 CLC4SEL0, LITERAL(CLCIN_FOSC); input selection
-    mov8 RA0PPS, LITERAL(PPSOUT_TMR0);
-    mov8 RA4PPS, LITERAL(PPSOUT_CLC4OUT);
-    messg CLC0 routed straight through for analyer debug
-;#define CLC4OUT  4; missing from .inc
-#define LC4MODE_ANDOR  (b'000' << LC4MODE0)
-;CLC4 routed straight thru (for analyer debug)
-    REPEAT 4, mov8 CLC4SEL0 + repeater, LITERAL(0); NO_PPS); set later
-    REPEAT 4, mov8 CLC4GLS0 + repeater, LITERAL(0xAA); all data gated, !inverted
-    mov8 CLC4POL, LITERAL(0); NOBIT(LC4POL) | NOBIT(LC4G4POL) | NOBIT(LC4G3POL) | NOBIT(LC4G2POL) | NOBIT(LC4G1POL)); !inverted output or inputs
-    mov8 CLC4CON, LITERAL(BIT(LC4EN) | NOBIT(LC4INTP) | NOBIT(LC4INTN) | LC4MODE_ANDOR); enable, no int, AND-OR
-#endif
-   endm
-#endif
-
-
-#if 0; default is unlocked
-pps_lock macro
-;requires next 5 instructions in sequence:
-    mov8 PPSLOCK, LITERAL(0x55);
-    mov8 PPSLOCK, LITERAL(0xAA);
-;    mov8 PPSLOCK, LITERAL(0); allow CLC1 output to be redirected to RA1/2/5/4
-    setbit PPSLOCK, PPSLOCKED, FALSE; allow output pins to be reassigned
-    endm
-#endif    
-
-
-;initialize run-time stats:
-    NBDCL numfr,;
-stats_init macro
-    mov8 numfr, LITERAL(0)
-;numfr2 EQU  H'0077'
-;    mov8 numfr2, LITERAL(0)
-    endm
-
-
-#if 0
-#define LC1G1D1T  1; should be in p16f15313.inc
-#define LC1D1S_LCIN3PPS  3; should be in p16f15313.inc
-debug_init macro
-    setbit CLC1CON, LC1EN, FALSE; datasheet says to disable CLC during setup
-    mov8 CLCIN3PPS, LITERAL(WSINCH); RA3; CAUTION: CLCIN0PPS not available to CLCxSELy?
-    mov8 CLC1SEL0, LITERAL(LC1D1S_LCIN3PPS); RA3 via CLCIN3PPS
-    REPEAT 4, mov8 CLC1GLS0 + repeater, LITERAL(0); no inputs routed => constant 0
-    mov8 CLC1GLS0, LITERAL(BIT(LC1G1D1T)); CLCIN3 routed to gate 0 data 1
-    mov8 CLC1POL, LITERAL(NOBIT(LC1POL) | BIT(LC1G4POL) | BIT(LC1G3POL) | BIT(LC1G2POL) | NOBIT(LC1G1POL)); !inverted output, unused inputs (0) inverted for input to 4-AND
-    mov8 CLC1CON, LITERAL(BIT(LC1EN) | NOBIT(LC1INTP) | NOBIT(LC1INTN) | LC1MODE_4AND); enable, no int, 4-way AND
-    mov8 RA4PPS, LITERAL(PPSOUT_CLC1OUT);
-debloop
-    setbit LATA, 0, TRUE;
-    setbit LATA, 0, FALSE
-    goto debloop
-;#ifdef WANT_DEBUG
-;    messg sending CLC1 out (WS in) to RA4
-;    mov8 RA4PPS, LITERAL(PPSOUT_CLC1OUT);
-;    messg sending PWM3 to RA5
-;    mov8 RA5PPS, LITERAL(PPS_PWM3OUT);
-;#endif
-    endm
-#endif
-
-    LIST
-init: DROP_CONTEXT; DROP_BANK ;Start:
-;    messg #v(BANKOF(ANSELA)), #v(BANKOFS(ANSELA))
-    iopin_init;
-    clk_init;
-;    debug_init;
-    pmd_init;
-    tmr0_init;
-    tmr1_init;
-    spi_init; includes tmr2_init and pwm_init
-;    zcd_init;
-;set up 3 CLC to allow 3-way output interleave:
-    chout_init 1;
-;    chout_init 2;
-;    chout_init 3;
-;    devtest_init;
-;    pps_lock; default is unlocked; ;NOTE: it would be preferable to lock PPS but WS input redir would use 4 CLC, leaving none for SPI debug output
-    stats_init;
-;#ifdef WANT_DEBUG
-#if 0
-    messg [DEBUG] sending SPI data to RA5
-    mov8 RA5PPS, LITERAL(PPS_CLC4OUT);
-;show internal signals:
-;    mov8 CLCIN2PPS, LITERAL(14); T2 ovfl
-;    mov8 CLCIN1PPS, LITERAL(13); T1 ovfl
-;    mov8 CLCIN0PPS, LITERAL(12); T0 ovfl
-;    LITERAL(5); HFINTOSC
-;    LITERAL(4); FOSC
-;    mov8 CLCIN3PPS, LITERAL(WSINCH); CAUTION: CLCIN0PPS not available to CLCxSELy? use CLCIN3PPS instead
-;    mov8 RA2PPS, LITERAL(PPS_CLC1OUT);
-;send SPI out:
-;    spi_send_byte LITERAL(0), +1;
-;    spi_send_byte LITERAL(0xff), +1;
-;    spi_send_byte LITERAL(0x55), +1;
-;    spi_send_byte LITERAL(0), +1;
-;    spi_send_byte LITERAL(10), +1;
-;    spi_send_byte LITERAL(0), +1;
-    wsnode_send LITERAL(0x00ff55), +1;
-    wsnode_send LITERAL(0x000a00), +1;
-;    goto $-1
-#endif
-    goto rcv_frame-1; a little more init before starting main loop
-
-
-;; misc helpers ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;busy-wait (for short intervals ONLY):
-;CAUTION: stack depth grows with longer delay period
-;wait_64usec: call wait_32usec; 16 instr; fall thru + return second time
-;wait_32usec: call wait_16usec; 16 instr; fall thru + return second time
-;wait_16usec: call wait_8usec; 16 instr; fall thru + return second time
-;wait_8usec: call wait_4usec; 16 instr; fall thru + return second time
-wait_4usec: call wait_2usec; 16 instr; fall thru + return second time
-wait_2usec: call wait_1usec; 8 instr; fall thru + return second time
-wait_1usec:
-#if FOSC_FREQ == 8 MIPS ;need one extra level for 8 MIPS
-    call wait_500nsec;
-wait_500nsec:
-#else
-    ERRIF FOSC_FREQ != 4 MIPS, [TODO] unhandled FOSC: #v(FOSC_FREQ), use 4 or 8 MIPS
-#endif
-    return; 4 instr call+return @4 MIPS == 1 usec
-
-
-;; color rendering for WS281X nodes: ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;send 24 bit color code to WS281X node:
-;#define LOBYTE(val)  IIF(ISLIT(val), LITERAL((val) & 0xFF), LO(val))
-;#define MIDBYTE(val)  IIF(ISLIT(val), LITERAL((val) >> 8 & 0xFF), MID(val))
-;#define HIBYTE(val)  IIF(ISLIT(val), LITERAL((val) >> 16 & 0xFF), HI(val))
-wsnode_send macro rgb, want_wait
-    LOCAL RGB = rgb ;kludge; force eval (avoids "missing operand" and "missing argument" errors/MPASM bugs); also helps avoid "line too long" messages (MPASM limit 200)
-    if ISLIT(RGB)  ;unpack RGB bytes
-	spi_send_byte LITERAL(RGB >> 16 & 0xFF), want_wait; 10 usec synchronous
-	spi_send_byte LITERAL(RGB >> 8 & 0xFF), want_wait; 10 usec synchronous
-	spi_send_byte LITERAL(RGB & 0xFF), want_wait; 10 usec synchronous
-    else; register
-	spi_send_byte HI(rgb), want_wait; 10 usec synchronous
-	spi_send_byte MID(rgb), want_wait; 10 usec synchronous
-	spi_send_byte LO(rgb), want_wait; 10 usec synchronous
+;repeat a statement the specified number of times:
+;stmt can refer to "repeater" for iteration-specific behavior
+;stmt cannot use more than 1 parameter (MPASM gets confused by commas; doesn't know which macro gets the params); use bitnum_arg() or other wrapper
+;params:
+; count = #times to repeat stmt
+; stmt = statement to be repeated
+;#define NOARG  0; dummy arg for stmts that don't want any
+    VARIABLE REPEATER; move outside macro so caller can use it
+REPEAT MACRO count, stmt; _arg1, arg2
+;    EXPAND_PUSH FALSE
+;    NOEXPAND  ;hide clutter
+;?    EXPAND_PUSH FALSE
+    LOCAL loop; must be outside if?
+    if !ISLIT(count)
+;        if $ < 10
+;	    messg REPEAT: var count #v(count) @__LINE__
+;	endif
+;        LOCAL loop
+;        EXPAND_POP
+	EMITL loop:	
+	EMIT stmt;
+;        EXPAND_PUSH FALSE
+        BANKCHK count;
+	BANKSAFE dest_arg(F) decfsz count;, F; CAUTION: 0 means 256
+;	EXPAND_POP
+	GOTO loop;
+	exitm
     endif
-;    LOCAL LOBYTE = IIF(ISLIT(RGB), LITERAL(RGB & 0xFF), LO(rgb))
-;    LOCAL MIDBYTE = IIF(ISLIT(RGB), LITERAL(RGB >> 8 & 0xFF), MID(rgb))
-;    LOCAL HIBYTE = IIF(ISLIT(RGB), LITERAL(RGB >> 16 & 0xFF), HI(rgb))
-;    spi_send_byte HIBYTE, want_wait; 10 usec synchronous
-;    spi_send_byte MIDBYTE, want_wait; 10 usec synchronous
-;    spi_send_byte LOBYTE, want_wait; 10 usec synchronous
-    endm
-
-
-;set next ws node to a primary RGB color:
-;CAUTION: busy-waits until SPI buf empty; do other processing before calling
-wsnode_off: DROP_CONTEXT; "black"
-    wsnode_send LITERAL(0), -1;
-    retlw 1;
-wsnode_red_bright: DROP_CONTEXT;
-    wsnode_send LITERAL(0x00FF00), -1;
-    retlw 1;
-wsnode_green_bright: DROP_CONTEXT;
-    wsnode_send LITERAL(0xFF0000), -1;
-    retlw 1;
-wsnode_blue_bright: DROP_CONTEXT;
-    wsnode_send LITERAL(0x0000FF), -1;
-    retlw 1;
-wsnode_yellow_bright: DROP_CONTEXT;
-    wsnode_send LITERAL(0x808000), -1; try to keep consistent brightness with single colors
-    retlw 1;
-wsnode_cyan_bright: DROP_CONTEXT;
-    wsnode_send LITERAL(0x800080), -1; try to keep consistent brightness with single colors
-    retlw 1;
-wsnode_magenta_bright: DROP_CONTEXT;
-    wsnode_send LITERAL(0x008080), -1; try to keep consistent brightness with single colors
-    retlw 1;
-wsnode_white_bright: DROP_CONTEXT;
-    wsnode_send LITERAL(0x555555), -1; try to keep consistent brightness with single colors
-    retlw 1;
-;dim variants (to make it easier on the eyes):
-wsnode_red_dim: DROP_CONTEXT;
-    wsnode_send LITERAL(0x000200), -1;
-    retlw 1;
-wsnode_green_dim: DROP_CONTEXT;
-    wsnode_send LITERAL(0x020000), -1;
-    retlw 1;
-wsnode_blue_dim: DROP_CONTEXT;
-    wsnode_send LITERAL(0x000002), -1;
-    retlw 1;
-wsnode_yellow_dim: DROP_CONTEXT;
-    wsnode_send LITERAL(0x010100), -1;
-    retlw 1;
-wsnode_cyan_dim: DROP_CONTEXT;
-    wsnode_send LITERAL(0x010001), -1;
-    retlw 1;
-wsnode_magenta_dim: DROP_CONTEXT;
-    wsnode_send LITERAL(0x000101), -1;
-    retlw 1;
-wsnode_white_dim: DROP_CONTEXT;
-    wsnode_send LITERAL(0x010101), -1;
-    retlw 1;
-
-
-;RGB color indexes:
-;bottom 3 bits control R/G/B on/off (for easier color combinations/debug), 4th bit is brightness
-#define RED_RGBINX  4
-#define GREEN_RGBINX  2
-#define BLUE_RGBINX  1
-#define BRIGHT(rgb)  ((rgb) + 8); brighter variant
-#define YELLOW_RGBINX  (RED_RGBINX | GREEN_RGBINX)
-#define CYAN_RGBINX  (GREEN_RGBINX | BLUE_RGBINX)
-#define MAGENTA_RGBINX  (RED_RGBINX | BLUE_RGBINX)
-#define PINK_RGBINX  MAGENTA_RGBINX; easier to spell :P
-#define WHITE_RGBINX  (RED_RGBINX | GREEN_RGBINX | BLUE_RGBINX)
-#define OFF_RGBINX  0; "black"
-
-
-;display buffer:
-;#define NUMPX  #v(24 + 8); 24 px for first wsnode received + 8 px for fps
-;    BDCL wsnodes:#v(NUMPX/2); 1 nibble per node (color indexed); FSR# handles banking
-    BDCL wsnodes,:24+8-16; 1 byte per node (color indexed): 24px for first rcv node + 8 px for fps; FSR# handles banking
-#define END_DETECT  16;0X40; BIT(5)
-;    CONSTANT wseof = ENDOF(wsnodes); line too long
-    messg [INFO] #wsnodes #v(SIZEOF(wsnodes)) @#v(wsnodes), eof@ #v(ENDOF(wsnodes)), detect& #v(END_DETECT)
-    ERRIF (ENDOF(wsnodes) - 1) & END_DETECT == ENDOF(wsnodes) & END_DETECT, [ERROR] nodebuf end detect broken, !span #v(END_DETECT): #v(wsnodes)
-    CONSTANT HI(FSR0) = FSR0H; mov16 shim
-    CONSTANT HI(FSR1) = FSR1H; mov16 shim
-;start rendering:
-wsnodes_start: DROP_CONTEXT;
-    mov16 FSR0, LITERAL(wsnodes); 0x2000 + NUMPX); linear addressing
-;fall thru
-;check whether to render next WS281X node:
-;CAUTION: assumes FSR0 is already set
-wsnodes_next: DROP_CONTEXT;
-    ifbit FSR0L, log2(END_DETECT), ENDOF(wsnodes) & END_DETECT, retlw 0; eof
-    moviw FSR0++; get next color index
-;    retlw 1;
-;    messg [DEBUG] ^^^^ REMOVE THIS
-;fall thru
-;render next WS281X node:
-wsnodes_send1: DROP_CONTEXT;
-;    moviw 0[FSR1]
-;    lsrf FSR1; nibble -> byte address
-;    swapf INDF1, W; get upper (even) nibble
-;    ifbit FSR1H, 1, TRUE, moviw FSR1++; get lower (odd) nibble
-    andlw 0x0F; only 4 lsb are used
-    brw;
-    CONSTANT jumptbl = $
-;#define oncase(val, dest)  
-;primary colors (dim):
-    ORG jumptbl + RED_RGBINX
-    goto wsnode_red_dim;
-    ORG jumptbl + GREEN_RGBINX
-    goto wsnode_green_dim;
-    ORG jumptbl + YELLOW_RGBINX;
-    goto wsnode_yellow_dim;
-    ORG jumptbl + BLUE_RGBINX;
-    goto wsnode_blue_dim;
-    ORG jumptbl + MAGENTA_RGBINX;
-    goto wsnode_magenta_dim;
-    ORG jumptbl + CYAN_RGBINX;
-    goto wsnode_cyan_dim;
-    ORG jumptbl + WHITE_RGBINX;
-    goto wsnode_white_dim;
-    ORG jumptbl + OFF_RGBINX;
-    goto wsnode_off;
-;primary colors (bright):
-    ORG jumptbl + BRIGHT(RED_RGBINX);
-    goto wsnode_red_dim;
-    ORG jumptbl + BRIGHT(GREEN_RGBINX);
-    goto wsnode_green_dim;
-    ORG jumptbl + BRIGHT(YELLOW_RGBINX);
-    goto wsnode_yellow_dim;
-    ORG jumptbl + BRIGHT(BLUE_RGBINX);
-    goto wsnode_blue_dim;
-    ORG jumptbl + BRIGHT(MAGENTA_RGBINX);
-    goto wsnode_magenta_dim;
-    ORG jumptbl + BRIGHT(CYAN_RGBINX);
-    goto wsnode_cyan_dim;
-    ORG jumptbl + BRIGHT(WHITE_RGBINX);
-    goto wsnode_white_dim;
-    ORG jumptbl + BRIGHT(OFF_RGBINX);
-    goto wsnode_off; redundant; could be used for something else
-;NOTE: above subroutines return to caller
-    ORG jumptbl + 16
-
-;render all nodes:
-wsnodes_all: DROP_CONTEXT;
-#if 1
-    messg [DEBUG] vvv REMOVE THIS!
-    mov8 WREG, LITERAL(BIT(RA2));
-    BANKCHK LATA
-    xorwf LATA, F;
-;    return; bypass render logic
-#endif
-    call wsnodes_start;
-wsnodes_more: DROP_CONTEXT;
-;    iorlw 0;
-;    ifbit STATUS, EQUALS, TRUE, return; continue until eof
-    decfsz WREG, F;
-    return; eof
-    call wsnodes_next;
-    goto wsnodes_more;
-
-wsnodes_clear: DROP_CONTEXT;
-;    ERRIF (wsnodes & 0xFF) != GPR_START, [ERROR] wsnodes is not at start of linear RAM
-;    ERRIF OFF_RGBINX, [ERROR] black should be index 0: #v(OFF_RGBINX)
-;    mov16 FSR0, LITERAL(0x2000 + NUMPX); linear addressing
-;    mov8 WREG, LITERAL(OFF_RGBINX);
-;    movwi FSR0++;
-;    mov8 WREG, FSR0L;
-;    xorlw LITERAL((wsnodes + NUMPX) & 0xFF);
-;    movwi FSR0;
-    mov16 FSR0, LITERAL(wsnodes); 0x2000 + NUMPX); linear addressing
-    mov8 WREG, LITERAL(OFF_RGBINX);
-init_loop: DROP_CONTEXT;
-;    clrf INDF0;
-;    movwi 0[FSR0]
-;    incfsz FSR0L, F
-    movwi FSR0++;
-;    messg end detect: #v(END_DETECT), #v(log2(END_DETECT)), #v(wsnodes), #v(wsnodes & END_DETECT)
-    ifbit FSR0L, log2(END_DETECT), ENDOF(wsnodes) & END_DETECT, return;
-    goto init_loop;
-
-
-;; WS281X decode ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;wait for WS input line to go high then low:
-;wait_wsbit macro ;want_high, want_timing
-;    BANKCHK WSIN
-;    if want_high
-;        btfss WSIN
-;	goto $-1
-;    else
-;	btfsc WSIN
-;	goto $-1
+    LOCAL COUNT;broken = LIT2VAL(count)
+    EMITL COUNT = LIT2VAL(count)
+    WARNIF(COUNT < 1, [WARNING] no repeat?"," count #v(COUNT) @__LINE__)
+    ERRIF(COUNT > 1000, [ERROR] repeat loop too big: count #v(COUNT) @__LINE__)
+;	if repeater > 1000  ;paranoid; prevent run-away code expansion
+;repeater = count
+;	    EXITM
+;	endif
+;    LOCAL repeater;broken = 0 ;count UP to allow stmt to use repeater value
+;    EMITL repeater = 0 ;count UP to allow stmt to use repeater value
+;    if $ < 10
+;	messg REPEAT: const "count" #v(COUNT) @__LINE__
 ;    endif
-;    if want_timing
-;	messg TODO
-;    endif
+;    messg REPEAT: count, stmt;_arg1, arg2 @__LINE__
+REPEATER = 0;
+    while REPEATER < COUNT  ;0, 1, ..., count-1
+;	if arg == NOARG
+;	    EXPAND_RESTORE  ;show generated code
+;	    NOEXPAND  ;hide clutter
+;	else
+;	EXPAND_RESTORE  ;show generated code
+;        EXPAND_PUSH TRUE
+        EMIT stmt; _arg1, arg2
+;        EXPAND_POP
+;	NOEXPAND  ;hide clutter
+;	endif
+;	EMITL repeater += 1
+REPEATER += 1
+    endw
+;    EXPAND_POP
+    ENDM
+;REPEAT macro count, stmt
+;    NOEXPAND  ;hide clutter
+;    REPEAT2 count, stmt,
 ;    endm
 
-;capture + decode next WS data bit:
-;see AN1473 for details on how pulse capture works
-wsbit_capture macro
-    mov8 TMR1L, LITERAL(0);
-;?    mov8 TMR1H, LITERAL(0);
-;    setbit T1GCON, T1GGO, TRUE; start capture of single pulse
-    tmr1_acq; start capture of single pulse
-;    BANKCHK PIR5
-;    BANKSAFE btfss PIR5, TMR1GIF; wait for pulse to go high then low
-;    ifbit PIR5, TMR1GIF, FALSE, goto $-1
-    ws_clrwdt FALSE;
-    mov8 WREG, TMR1L; get pulse width
-    setbit PIR5, TMR1GIF, FALSE ;disable capture
-    endm
 
-
-    NBDCL24 chqlen; hi = ch1, mid = ch2, lo = ch3
-;    NBDCL ch2qlen
-;    NBDCL ch3qlen
-;save next bit of WS281X input stream bits:
-save_bit macro dummy1_arg, dummy2_arg
-    wsbit_capture
-;    sub8 LITERAL(WSBIT_THRESHOLD), WREG
-    addlw -WSBIT_THRESHOLD & 0xFF; Borrow => WS "0" bit received, Carry => WS "1" bit received
-;    lslf ch1qlen
-;    BANKCHK LO(chqlen);
-;shift new bit into lsb:
-    rlf LO(chqlen), F
-    rlf MID(chqlen), F
-    rlf HI(chqlen), F
-    endm
-
-
-;send next bit of WS281X data:
-;pass_node macro
-;CLC will pass through WS281X data faster than bit-banging, but need count to control debout output
-;    wait_wsbit 1, FALSE
-;    wait wsbit 0, FALSE
-;    REPEAT 24, wsbit_capture; don't need to capture value, but caller needs to count bits
-;    messg "TODO: pass_node"
+;init injection:
+;not needed; just define a linked list of executable code (perf doesn't matter @startup)
+;init macro
+;    EXPAND_PUSH FALSE
+;;broken    REPEAT INIT_COUNT, init_#v(repeater)
+;init_code: DROP_CONTEXT
+;    LOCAL count = 0;
+;    while count < INIT_COUNT
+;	init_#v(count)
+;count += 1;
+;    endw
+;    EXPAND_POP
 ;    endm
 
-;redirect 4 WS281X nodes to current output channel:
-    NBDCL wsbits,
-pass_quadnode: DROP_CONTEXT; DROP_BANK
-;    REPEAT 4, pass_node
-    mov8 wsbits, LITERAL(4 * 24)
-wait_wsbit: DROP_CONTEXT;
-    wsbit_capture; don't need to capture value, just count bits for caller
-    decfsz wsbits, F
-    goto wait_wsbit;
-    return
-
-
-;; main logic ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;prepare debout data for display:
-    NBDCL debout_count,
-    NBDCL24 debout_chlen
-    NBDCL debout_fps,
-;    NBDCL debout_2
-;    NBDCL debout_3
-debout_prepare macro
-;    mov8 debout_0, ch1qlen
-;    mov8 debout_1, ch2qlen
-;    mov8 debout_2, ch3qlen
-    mov24 debout_chlen, chqlen
-    mov8 debout_fps, LITERAL(0xFF); TODO: FPS
-    mov8 debout_count, LITERAL(24+8); set debout length (#WS281X bits)
-    endm
-;render debout data:
-debout_render macro
-    decfsz debout_count, F
-    goto debout_complete
-#if 1
-    messg TODO: debout logic using SPI
-#endif
-    endm
-
-;show_debug macro
-;;    mov8 RA5PPS, LITERAL(0);
-;    setbit LATA, RA2, 0;
-;;    call wait_16usec; make it easier to see on analyser; DEBUG ONLY
-;;    mov8 RA5PPS, LITERAL(PPS_PWM3OUT);
-;    setbit LATA, RA2, 1;
-;    setbit LATA, RA2, 0;
-;    setbit LATA, RA2, 1;
-;    endm
-
-#ifdef WANT_DEBUG
-wait_qtrsec: DROP_CONTEXT
-    wait_msec 250,
-    return;
-
-wait_halfsec: DROP_CONTEXT
-    wait_msec 500,
-    return;
-
-wait_1sec: DROP_CONTEXT
-    wait_sec 1,
-    return;
-#endif
-
-;blink2: DROP_CONTEXT
-;    setbit LATA, RA2, 1;
-;    call wait_qtrsec
-;    setbit LATA, RA2, 0;
-;    call wait_halfsec
-;    setbit LATA, RA2, 1;
-;    call wait_qtrsec
-;    setbit LATA, RA2, 0;
-;    call wait_halfsec
-;    return;
-
-more_init:
-;    call blink2;
-    call wsnodes_clear;
-;    call wait_1sec;
-;    call blink2;
-    return;
-
-;reset state and wait for next frame:
-;ws_timeout: DROP_BANK
-;    BANKCHK STKPTR;
-;    BANKSAFE decf STKPTR, F; not going to RETFIE; adjust stack manually
-;    DROP_BANK
-    call more_init
-;    nop
-rcv_frame: DROP_CONTEXT; DROP_BANK; DROP_WREG
-;    mov8 RA1PPS, LITERAL(CLC1OUT); , LITERAL(RA1); redirect WS input to channel 1
-;    goto $-1;
-;enable 50 usec timeout to detect end of frame:
-;WDT minimum time 2 msec is too long for WS281X reset time of 50 usec; use Timer 0 instead
-;use interrupt to avoid polling for timeout; if timeout occurs, nothing else is happening anyway
-;#ifdef WANT_DEBUG; show TMR0IF on RA0, RA4
-#if 0; 1
-    setbit LATA, RA2, 1;
-    call wait_1sec
-    setbit LATA, RA2, 0;
-    call wait_1sec
-    goto rcv_frame;
-#endif
-#if 1
-#ifndef BITBANG
-;#define PPS_SDO1  0x16; should be in p16f15313.inc
-;#define PPS_SCK1  0x15; should be in p16f15313.inc
-    messg [DEBUG] sending SPI data to RA5
-    mov8 RA5PPS, LITERAL(PPS_CLC4OUT);
-;    messg [DEBUG] sending SDO1 to RA5
-;    mov8 RA5PPS, LITERAL(PPS_SCK1); looks good: 1.25 usec each pulse (1x ws bit speed)
-;    mov8 RA5PPS, LITERAL(PPS_PWM3OUT); looks good: 0.625 usec each pulse (2x ws bit speed)
-#endif
-;    goto rcv_frame2;
-;ani_start: DROP_CONTEXT;
-    NBDCL color,;
-    mov8 color, LITERAL(RED_RGBINX);
-    mov16 FSR1, LITERAL(wsnodes);
-ani_loop: DROP_CONTEXT;
-;    call blink2;
-    mov8 INDF1, color;
-    call wsnodes_all;
-;    call wait_1sec;
-    wait_msec 100,; animation speed
-;    call wsnodes_clear;
-    mov8 INDF1_postinc, LITERAL(OFF_RGBINX); turn it off again before moving to next node (more efficient than clearing entire node buf each time)
-    ifbit FSR1L, log2(END_DETECT), !(ENDOF(wsnodes) & END_DETECT), goto ani_loop; !eof
-    mov8 FSR1, LITERAL(wsnodes); rewind
-;    xorlw OFF_RGBINX;
-;    ifbit STATUS_EQUALS, FALSE, goto ani_loop;
-;    incf color, F;
-    mov8 WREG, color;
-    call choose_next_color;
-    mov8 color, WREG;
-    goto ani_loop;
-
-choose_next_color: DROP_CONTEXT;
-    andlw 0x0F; only 4 lsb are used
-    brw
-    CONSTANT nexttbl = $
-    ORG nexttbl + RED_RGBINX
-    retlw GREEN_RGBINX;
-    ORG nexttbl + GREEN_RGBINX
-    retlw YELLOW_RGBINX;
-    ORG nexttbl + YELLOW_RGBINX;
-    retlw BLUE_RGBINX
-    ORG nexttbl + BLUE_RGBINX;
-    retlw MAGENTA_RGBINX
-    ORG nexttbl + MAGENTA_RGBINX;
-    retlw CYAN_RGBINX
-    ORG nexttbl + CYAN_RGBINX;
-    retlw WHITE_RGBINX;
-    ORG nexttbl + WHITE_RGBINX;
-    retlw OFF_RGBINX;
-    ORG nexttbl + OFF_RGBINX;
-;    goto rcv_frame; repeat
-    retlw RED_RGBINX;
-    ORG nexttbl + 8
-#endif
-#if 0
-rcv_frame2: DROP_CONTEXT; DROP_BANK
-    setbit LATA, RA2, 1;
-    wsnode_send LITERAL(0x030000), +1; 0x70101), +1; 30 usec synchronous
-;    call wait_8usec
-    wsnode_send LITERAL(0x000300), +1; 0x70101), +1; 30 usec synchronous
-;    call wait_8usec
-    wsnode_send LITERAL(0x000003), +1; 0x70101), +1; 30 usec synchronous
-;    call wait_8usec
-    wsnode_send LITERAL(0x010100), +1; 0x70101), +1; 30 usec synchronous
-;    call wait_8usec
-    wsnode_send LITERAL(0x010001), +1; 0x70101), +1; 30 usec synchronous
-;    call wait_8usec
-    wsnode_send LITERAL(0x000101), +1; 0x70101), +1; 30 usec synchronous
-    setbit LATA, RA2, 0;
-    call wait_1sec
-    REPEAT 6, wsnode_send LITERAL(0), +1; 0x70101), +1; 30 usec synchronous
-    call wait_1sec
-    goto rcv_frame2;
-    
-;    setbit LATA, RA2, 0;
-;    setbit LATA, RA2, 1;
-;    show_debug;
-;    spi_send_byte LITERAL(0x3a), +1; 10 usec synchronous
-;    setbit LATA, RA2, 0
-;    call wait_32usec
-;    goto rcv_frame
-;on, off, on, off, on:
-;    mov8 RA5PPS, LITERAL(PPS_PWM3OUT);
-    wsnode_send LITERAL(0x030101), +1; 0x70101), +1; 30 usec synchronous
-;    show_debug
-    wsnode_send LITERAL(0), +1; 30 usec synchronous
-;    show_debug
-    wsnode_send LITERAL(0x010301), +1; 0x10701), +1; 30 usec synchronous
-;    show_debug
-    wsnode_send LITERAL(0), +1; 30 usec synchronous
-;    show_debug
-    wsnode_send LITERAL(0x010103), +1; 0x10107), +1; 30 usec synchronous
-;    show_debug
-    wsnode_send LITERAL(0), +1; 30 usec synchronous
-;    show_debug
-;    mov8 RA5PPS, LITERAL(0);
-;    setbit LATA, RA2, 0;
-    call wait_1sec
-;    call wait_1sec
-;    call wait_1sec
-    ;off, on, off, on, off:
-    setbit LATA, RA2, 0;
-;    setbit LATA, RA2, 1;
-;    setbit LATA, RA2, 0;
-;    mov8 RA5PPS, LITERAL(PPS_PWM3OUT);
-    wsnode_send LITERAL(0), +1; 30 usec synchronous
-;    show_debug
-    wsnode_send LITERAL(0x020201), +1; 0x030301), +1; 30 usec synchronous
-;    show_debug
-    wsnode_send LITERAL(0), +1; 30 usec synchronous
-;    show_debug
-    wsnode_send LITERAL(0x010202), +1; 0x010303), +1; 30 usec synchronous
-;    show_debug
-    wsnode_send LITERAL(0), +1; 30 usec synchronous
-;    show_debug
-    wsnode_send LITERAL(0x020102), +1; 0x030103), +1; 30 usec synchronous
-;    mov8 RA5PPS, LITERAL(0);
-;    setbit LATA, RA2, 1;
-    call wait_1sec
-;    call wait_1sec
-;    call wait_1sec
-    goto rcv_frame;
-
-;red:
-    wsnode_send LITERAL(0x040000), +1; 30 usec synchronous
-    call wait_1sec
-;green:
-    wsnode_send LITERAL(0x000400), +1; 30 usec synchronous
-    call wait_1sec
-;blue:
-    wsnode_send LITERAL(0x000004), +1; 30 usec synchronous
-    call wait_1sec
-    goto rcv_frame
-#endif
-#if 0
-    messg HB debug @~1.6 Hz
-;	setbit LATA, RA5, TRUE;
-;	setbit LATA, RA5, FALSE;
-;    BANKCHK LATA; do banksel < loop
-;loop:
-;    setbit LATA, RA2, FALSE
-;    setbit LATA, RA2, TRUE
-;    goto loop
-    mov8 WREG, LITERAL(BIT(RA2));
-    BANKCHK LATA
-    xorwf LATA, F
-#endif
-#if 0
-    messg r/g/b hb 1 hz on ra5
-;    BANKCHK numfr;
-    decfsz LO(counter16), F
-    goto resume_rcvfr
-    decfsz HI(counter16), F
-    goto resume_rcvfr
-    incf numfr, F
-;20K * 50 usec == 1 sec
-;    mov8 counterL, LITERAL(20000 & 0xFF);
-;    mov8 counterH, LITERAL(20000 / 256 & 0xFF);
-    mov16 counter16, LITERAL(20000);
-    mov8 RA5PPS, LITERAL(PPS_CLC4OUT);
-;send SPI out:
-;    spi_send_byte LITERAL(0), +1;
-;    spi_send_byte LITERAL(0xff), +1;
-;    spi_send_byte LITERAL(0x55), +1;
-    mov8 WREG, LITERAL(4);
-    ifbit numfr, 2, FALSE, clrw
-    spi_send_byte WREG, +1; 10 usec synchronous
-    mov8 WREG, LITERAL(4);
-    ifbit numfr, 1, FALSE, clrw
-    spi_send_byte WREG, +1; 10 usec synchronous
-    mov8 WREG, LITERAL(4);
-    ifbit numfr, 0, FALSE, clrw
-    spi_send_byte WREG, +1; 10 usec synchronous
-resume_rcvfr: DROP_CONTEXT; DROP_BANK
-#endif
-    ws_clrwdt TRUE;
-;    goto $-1
-;    messg ^^^ RMEOVE
-;    setbit PIR0, TMR0IF, FALSE; clear previous interrupt
-;    setbit INTCON, GIE, TRUE; (re-)enable interrupts
-;    messg ^^^ REINSTATE
-;capture first WS input node:
-;loop:
-;    setbit PIR, SSP1IF, TRUE;
-;    spi_send_byte LITERAL(0xF0), 0;
-;    spi_send_byte LITERAL(0x0F), ~0;
-;    goto loop;
-    REPEAT 24, save_bit ,; NOARG, NOARG
-    messg [TODO] check for special function codes (skip, dup, etc)
-    messg [TODO] add special RGB value to write to EEPROM for config
-    messg [TODO] add WS-to-PWM (AC phase angle) dimming ~Pixel2Thing
-    debout_prepare
-    mov8 RA4PPS, LITERAL(0); NO_PPS); turn off channel 4
-    mov8 RA1PPS, LITERAL(PPS_CLC1OUT); , LITERAL(RA1); redirect WS input to channel 1
-channel1: ;DROP_BANK
-;    REPEAT 4, pass_node
-    call pass_quadnode;
-    decfsz LO(chqlen), F
-    goto channel1
-    mov8 RA1PPS, LITERAL(0); NO_PPS); turn off channel 1
-    mov8 RA2PPS, LITERAL(PPS_CLC1OUT); , LITERAL(RA1); redirect WS input to channel 2
-channel2: ;DROP_BANK
-;    REPEAT 4, pass_node
-    call pass_quadnode;
-    decfsz MID(chqlen), F
-    goto channel2
-    mov8 RA2PPS, LITERAL(0); NO_PPS); turn off channel 2
-    mov8 RA#v(3+2)PPS, LITERAL(PPS_CLC1OUT); , LITERAL(RA1); redirect WS input to channel 3
-channel3: ;DROP_BANK
-;    REPEAT 4, pass_node
-    call pass_quadnode;
-    decfsz HI(chqlen), F
-    goto channel3
-    mov8 RA#v(3+2)PPS, LITERAL(0); NO_PPS); turn off channel 3
-    mov8 RA4PPS, LITERAL(PPS_CLC1OUT); , LITERAL(RA1); redirect WS input to channel 4
-channel4: ;DROP_BANK
-;    pass_node
-    call pass_quadnode;
-    goto channel4
-
-
+eof_#v(EOF_COUNT) macro
     CONSTANT EOF_ADDR = $
-#define pct(num, den)  rdiv(100 * (num), den)
-eof: ;//sanity checks, perf stats
-    messg [INFO] optimization stats:
-    ERRIF MEXPAND_DEPTH, [ERROR] missing #v(MEXPAND_DEPTH) MEXPAND_POP(s),
-    messg [INFO] bank sel: #v(BANKSEL_KEEP) (#v(pct(BANKSEL_KEEP, BANKSEL_KEEP + BANKSEL_DROP))%), dropped: #v(BANKSEL_DROP) (#v(pct(BANKSEL_DROP, BANKSEL_KEEP + BANKSEL_DROP))%); ;perf stats
-    messg [INFO] bank0 used: #v(RAM_USED#v(0))/#v(RAM_LEN#v(0)) (#v(pct(RAM_USED#v(0), RAM_LEN#v(0)))%)
-    MESSG [INFO] bank1 used: #v(RAM_USED#v(1))/#v(RAM_LEN#v(1)) (#v(pct(RAM_USED#v(1), RAM_LEN#v(1)))%)
-    MESSG [INFO] non-banked used: #v(RAM_USED#v(NOBANK))/#v(RAM_LEN#v(NOBANK)) (#v(pct(RAM_USED#v(NOBANK), RAM_LEN#v(NOBANK)))%)
-    messg [INFO] page sel: #v(PAGESEL_KEEP) (#v(pct(PAGESEL_KEEP, PAGESEL_KEEP + PAGESEL_DROP))%), dropped: #v(PAGESEL_DROP) (#v(pct(PAGESEL_DROP, PAGESEL_KEEP + PAGESEL_DROP))%); ;perf stats
-    messg [INFO] page0 used: #v(EOF_ADDR)/#v(LIT_PAGELEN) (#v(pct(EOF_ADDR, LIT_PAGELEN))%)
-;    MESSG "TODO: fix eof page check"
-    ERRIF LITPAGEOF(EOF_ADDR), [ERROR] code page 0 overflow: eof @#v(EOF_ADDR) is past #v(LIT_PAGELEN), need page selects; need to add page selects
+eof:; only used for compile; this must go AFTER all executable code (MUST be a forward reference for pass 1); used to detect pass 1 vs. 2 for annoying error[116] fixups
+    messg [INFO] optimization stats: @__LINE__
+    ERRIF(LITPAGEOF(EOF_ADDR), [ERROR] code page 0 overflow: eof @#v(EOF_ADDR) is past #v(LIT_PAGELEN)"," need page selects @__LINE__); need to add page selects
+;    EMIT sleep;
+    endm
+EOF_COUNT += 1;
+
+    NOEXPAND
+    NOLIST; reduce .LST clutter
+    messg end of hoist 0 @__LINE__
+;#else; too deep :(
+#endif
+#if HOIST == 6
+    messg epilog @__LINE__
+    NOLIST; don't show this section in .LST file
+;; epilog ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;    init
+;    cre_threads
+;init_#v(INIT_COUNT): DROP_CONTEXT; macro
+    init_more TRUE;
+    at_eof; include trailing code
+    sleep; goto $; all code has run, now just wait for something to happen
+;INIT_COUNT = -1; += 999; terminate init code chain
+    
+;    variable @here = 3;
+    
+;    CONSTANT EOF_ADDR = $
+;stkptr_#v(0) EQU stkptr_#v(NUM_THREADS); wrap-around for round robin yield
+;start_thread_#v(0) EQU yield; 
+;//sanity checks, perf stats:
+;eof:  ;this must go AFTER all executable code (MUST be a forward reference); used to detect pass 1 vs. 2 for annoying error[116] fixups
+;    messg [INFO] optimization stats: @__LINE__
+;    ERRIF(MEXPAND_DEPTH, [ERROR] missing #v(MEXPAND_DEPTH) MEXPAND_POP(s), @__LINE__)
+;    WARNIF(LSTCTL_DEPTH, [WARNING] list expand stack not empty @eof: #v(LSTCTL_DEPTH), top = #v(LSTCTL_STKTOP) @__LINE__); can only detect ON entries, but good enough since outer level is off
+;    messg [INFO] bank sel: #v(BANKSEL_KEEP) (#v(pct(BANKSEL_KEEP, BANKSEL_KEEP + BANKSEL_DROP))%), dropped: #v(BANKSEL_DROP) (#v(pct(BANKSEL_DROP, BANKSEL_KEEP + BANKSEL_DROP))%) @__LINE__; ;perf stats
+;    messg [INFO] bank0 used: #v(RAM_USED#v(0))/#v(RAM_LEN#v(0)) (#v(pct(RAM_USED#v(0), RAM_LEN#v(0)))%) @__LINE__
+;    MESSG [INFO] bank1 used: #v(RAM_USED#v(1))/#v(RAM_LEN#v(1)) (#v(pct(RAM_USED#v(1), RAM_LEN#v(1)))%) @__LINE__
+;    MESSG [INFO] non-banked used: #v(RAM_USED#v(NOBANK))/#v(RAM_LEN#v(NOBANK)) (#v(pct(RAM_USED#v(NOBANK), RAM_LEN#v(NOBANK)))%) @__LINE__
+;    messg [INFO] page sel: #v(PAGESEL_KEEP) (#v(pct(PAGESEL_KEEP, PAGESEL_KEEP + PAGESEL_DROP))%), dropped: #v(PAGESEL_DROP) (#v(pct(PAGESEL_DROP, PAGESEL_KEEP + PAGESEL_DROP))%) @__LINE__; ;perf stats
+;    messg [INFO] page0 used: #v(EOF_ADDR)/#v(LIT_PAGELEN) (#v(pct(EOF_ADDR, LIT_PAGELEN))%) @__LINE__
+;    MESSG "TODO: fix eof page check @__LINE__"
+;    messg [INFO] #threads: #v(NUM_THREADS), stack space needed: #v(STK_ALLOC), unalloc: #v(HOST_STKLEN - STK_ALLOC) @__LINE__
+;    messg [INFO] Ugly fixups pass1: #v(PASS1_FIXUPS/0x10000):#v(PASS1_FIXUPS%0x10000), pass2: #v(PASS2_FIXUPS/0x10000):#v(PASS2_FIXUPS%0x10000) @__LINE__
+;    ERRIF(LITPAGEOF(EOF_ADDR), [ERROR] code page 0 overflow: eof @#v(EOF_ADDR) is past #v(LIT_PAGELEN), need page selects @__LINE__); need to add page selects
 ;    END
-;#else //!WANT_HOIST
-;#endif ;WANT_HOIST
-;    messg "hello 5"
-    END
-;eof
+
+    NOLIST; reduce .LST clutter
+    messg end of epilog @__LINE__
+#endif; HOIST 6
+;#endif; HOIST 0
+;#endif; HOIST 1
+;#endif; HOIST 2
+;#endif; HOIST 3
+;#endif; HOIST 4
+;#endif; HOIST 5
+;#endif; HOIST 6
+#endif; ndef HOIST    
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;hoist plumbing:
+;generates bottom-up assembly code from the above top-down src code
+;kludge: MPASM loses track of line#s if file is #included > 1x, so append # to make each unique
+#ifndef HOIST
+;#define END; "hide" except at outer layer
+#define HOIST 1
+#include __FILE__ 1; self
+#undefine HOIST
+#define HOIST 2
+#include __FILE__ 2; self
+#undefine HOIST
+#define HOIST 3
+#include __FILE__ 3; self
+#undefine HOIST
+#define HOIST 4
+#include __FILE__ 4; self
+#undefine HOIST
+#define HOIST 5
+#include __FILE__ 5; self
+#undefine HOIST
+#define HOIST 6
+#include __FILE__ 6; self
+#undefine HOIST
+#define HOIST 7
+#include __FILE__ 7; self
+#undefine HOIST
+;#undefine END; unhide for real eof
+#endif; ndef HOIST
+;eof control:
+#ifdef HOIST
+ #ifndef END
+  #define END; prevent hoisted files from ending input
+ #endif
+#else
+ #undefine END; allow outer file to end input
+#endif; ndef HOIST
+    END; eof, maybe

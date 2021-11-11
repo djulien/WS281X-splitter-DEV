@@ -98,14 +98,14 @@ else
 IsDebug="false"
 endif
 
-.build-conf:  ${BUILD_SUBPROJECTS}
+.build-conf:  .pre ${BUILD_SUBPROJECTS}
 ifneq ($(INFORMATION_MESSAGE), )
 	@echo $(INFORMATION_MESSAGE)
 endif
 	${MAKE}  -f nbproject/Makefile-default.mk dist/${CND_CONF}/${IMAGE_TYPE}/wssplitter.X.${IMAGE_TYPE}.${OUTPUT_SUFFIX}
 	@echo "--------------------------------------"
-	@echo "User defined post-build step: [cp ${ImagePath} /home/dj/Documents/ESOL-fog/ESOL21/tools/PIC/firmware]"
-	@cp ${ImagePath} /home/dj/Documents/ESOL-fog/ESOL21/tools/PIC/firmware
+	@echo "User defined post-build step: [rm -f nope__FILE__* && cp ${ImagePath} /home/dj/Documents/ESOL-fog/ESOL21/tools/PIC/firmware &&  awk 'BEGIN{IGNORECASE=1} NR==FNR { if ($$2 == "EQU") EQU[$$1] = $$3; next; } !/^ +((M|[0-9]+) +)?(EXPAND|EXITM|LIST)([ ;_]|$$)/  { if ((NF != 2) || !match($$2, /^[0-9A-Fa-f]+$$/) || (!EQU[$$1] && !match($$1, /_[0-9]+$$/))) print; }'  /opt/microchip/mplabx/v5.35/mpasmx/p16f15313.inc  ./build/${ConfName}/${IMAGE_TYPE}/wssplitter.o.lst  >  wssplitter.LST]"
+	@rm -f nope__FILE__* && cp ${ImagePath} /home/dj/Documents/ESOL-fog/ESOL21/tools/PIC/firmware &&  awk 'BEGIN{IGNORECASE=1} NR==FNR { if ($$2 == "EQU") EQU[$$1] = $$3; next; } !/^ +((M|[0-9]+) +)?(EXPAND|EXITM|LIST)([ ;_]|$$)/  { if ((NF != 2) || !match($$2, /^[0-9A-Fa-f]+$$/) || (!EQU[$$1] && !match($$1, /_[0-9]+$$/))) print; }'  /opt/microchip/mplabx/v5.35/mpasmx/p16f15313.inc  ./build/${ConfName}/${IMAGE_TYPE}/wssplitter.o.lst  >  wssplitter.LST
 	@echo "--------------------------------------"
 
 MP_PROCESSOR_OPTION=16f15313
@@ -117,7 +117,7 @@ ${OBJECTDIR}/wssplitter.o: wssplitter.asm  nbproject/Makefile-${CND_CONF}.mk
 	@${MKDIR} "${OBJECTDIR}" 
 	@${RM} ${OBJECTDIR}/wssplitter.o.d 
 	@${RM} ${OBJECTDIR}/wssplitter.o 
-	@${FIXDEPS} dummy.d -e "/home/dj/MPLABXProjects/wssplitter.X/wssplitter.ERR" $(SILENT) -c ${MP_AS} $(MP_EXTRA_AS_PRE) -d__DEBUG -d__MPLAB_DEBUGGER_SIMULATOR=1 -q -p$(MP_PROCESSOR_OPTION) -u  $(ASM_OPTIONS)    \\\"/home/dj/MPLABXProjects/wssplitter.X/wssplitter.asm\\\" 
+	@${FIXDEPS} dummy.d -e "/home/dj/MPLABXProjects/wssplitter.X/wssplitter.ERR" $(SILENT) -c ${MP_AS} $(MP_EXTRA_AS_PRE) -d__DEBUG -d__MPLAB_DEBUGGER_SIMULATOR=1 -q -p$(MP_PROCESSOR_OPTION) -u  $(ASM_OPTIONS)    \\\"/home/dj/MPLABXProjects/wssplitter.X/wssplitter.asm\\\"  -w0
 	@${MV}  /home/dj/MPLABXProjects/wssplitter.X/wssplitter.O ${OBJECTDIR}/wssplitter.o
 	@${MV}  /home/dj/MPLABXProjects/wssplitter.X/wssplitter.ERR ${OBJECTDIR}/wssplitter.o.err
 	@${MV}  /home/dj/MPLABXProjects/wssplitter.X/wssplitter.LST ${OBJECTDIR}/wssplitter.o.lst
@@ -130,7 +130,7 @@ ${OBJECTDIR}/wssplitter.o: wssplitter.asm  nbproject/Makefile-${CND_CONF}.mk
 	@${MKDIR} "${OBJECTDIR}" 
 	@${RM} ${OBJECTDIR}/wssplitter.o.d 
 	@${RM} ${OBJECTDIR}/wssplitter.o 
-	@${FIXDEPS} dummy.d -e "/home/dj/MPLABXProjects/wssplitter.X/wssplitter.ERR" $(SILENT) -c ${MP_AS} $(MP_EXTRA_AS_PRE) -q -p$(MP_PROCESSOR_OPTION) -u  $(ASM_OPTIONS)    \\\"/home/dj/MPLABXProjects/wssplitter.X/wssplitter.asm\\\" 
+	@${FIXDEPS} dummy.d -e "/home/dj/MPLABXProjects/wssplitter.X/wssplitter.ERR" $(SILENT) -c ${MP_AS} $(MP_EXTRA_AS_PRE) -q -p$(MP_PROCESSOR_OPTION) -u  $(ASM_OPTIONS)    \\\"/home/dj/MPLABXProjects/wssplitter.X/wssplitter.asm\\\"  -w0
 	@${MV}  /home/dj/MPLABXProjects/wssplitter.X/wssplitter.O ${OBJECTDIR}/wssplitter.o
 	@${MV}  /home/dj/MPLABXProjects/wssplitter.X/wssplitter.ERR ${OBJECTDIR}/wssplitter.o.err
 	@${MV}  /home/dj/MPLABXProjects/wssplitter.X/wssplitter.LST ${OBJECTDIR}/wssplitter.o.lst
@@ -152,6 +152,11 @@ dist/${CND_CONF}/${IMAGE_TYPE}/wssplitter.X.${IMAGE_TYPE}.${OUTPUT_SUFFIX}: ${OB
 	${MP_LD} $(MP_EXTRA_LD_PRE)   -p$(MP_PROCESSOR_OPTION)  -w  -m"${DISTDIR}/${PROJECTNAME}.${IMAGE_TYPE}.map"   -z__MPLAB_BUILD=1  -odist/${CND_CONF}/${IMAGE_TYPE}/wssplitter.X.${IMAGE_TYPE}.${DEBUGGABLE_SUFFIX}  ${OBJECTFILES_QUOTED_IF_SPACED}     
 endif
 
+.pre:
+	@echo "--------------------------------------"
+	@echo "User defined pre-build step: [cat wssplitter.asm  |  awk '{gsub(/__LINE__/, NR)}1' |  tee  "__FILE__ 1.ASM"  "__FILE__ 2.ASM"  "__FILE__ 3.ASM"  "__FILE__ 4.ASM"  "__FILE__ 5.ASM"  "__FILE__ 6.ASM"  "__FILE__ 7.ASM"  >  __FILE__.ASM]"
+	@cat wssplitter.asm  |  awk '{gsub(/__LINE__/, NR)}1' |  tee  "__FILE__ 1.ASM"  "__FILE__ 2.ASM"  "__FILE__ 3.ASM"  "__FILE__ 4.ASM"  "__FILE__ 5.ASM"  "__FILE__ 6.ASM"  "__FILE__ 7.ASM"  >  __FILE__.ASM
+	@echo "--------------------------------------"
 
 # Subprojects
 .build-subprojects:

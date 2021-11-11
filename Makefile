@@ -48,6 +48,9 @@ MKDIR=mkdir
 CP=cp
 CCADMIN=CCadmin
 RANLIB=ranlib
+#RM=rm
+#AWK=awk
+#GREP=grep
 
 
 # build
