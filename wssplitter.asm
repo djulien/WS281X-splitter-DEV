@@ -49,59 +49,56 @@
     EXPAND_PUSH FALSE
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;compile-time options:
-;#define BITBANG; dev/test only
+;//compile-time options:
+;#define BITBANG; //dev/test only
 ;;#define SPI_TEST
-#define WANT_DEBUG; DEV/TEST ONLY!
-;#define WANT_ISR; ISR not used; uncomment to reserve for (jump from) ISR
-#define WSBIT_FREQ  (800 KHz); WS281X "high" speed
-#define WSLATCH  (50 -20 usec); end-of-frame latch time; "cheat" by using shorter interval and use the extra time for processing overhead
-;#define MAX_THREADS  2; ani xmit or frame rcv, breakout xmit
-#define FOSC_FREQ  (32 MHz); max speed; TODO: check if lower speed will work
+#define WANT_DEBUG; //DEV/TEST ONLY!
+;#define WANT_ISR; //ISR not used; uncomment to reserve space for ISR (or jump to)
+#define WSBIT_FREQ  (800 KHz); //WS281X "high" speed
+#define WSLATCH  (50 -20 usec); //end-of-frame latch time; "cheat" by using shorter interval and use the extra time for processing overhead
+;#define MAX_THREADS  2; //anim xmit or frame rcv, breakout xmit
+#define FOSC_FREQ  (32 MHz); //max speed; NOTE: SPI 3x requires max speed, otherwise lower speed might work
 
-;pin assignments:
-#define WSDI  RA3; RA3 = WS input stream (from controller or previous WS281X pixels)
-#define BREAKOUT  RA0; RA0 = WS breakout pixels, or simple LED for dev/debug
-#define LEDOUT  IIFDEBUG(SEG4OUT, -1); RA5 = simple LED output; ONLY FOR DEV/DEBUG
-;#define WSCLK  4-2; RA4 = WS input clock (recovered from WS input data signal); EUSART sync rcv clock needs a real I/O pin?
-#define SEG1OUT  RA1; RA1 = WS output segment 1
-#define SEG2OUT  RA2; RA2 = WS output segment 2
-#define SEG3OUT  RA#v(3+2); RA5 = WS output segment 3; RA3 is input-only, use alternate pin for segment 3
-#define SEG4OUT  RA4; RA4 = WS output segment 4
-#define RGSWAP  0x321; 3 = R, 2 = G, 1 = B; default = 0x123 = BGR
-;123 = rbg
-;132 = brg
-;213 = gbr
-;231 = grb
-;312 = bgr
-;321 = rgb
-
-;peripherals:
-;NOTE: PPS is locked and each WS output segment has its own CLC to copy RA3, rather than changing PPS all the time
-;#define WSSYNC  3; PWM# generate WS data sync pulse
-;#define WSPASS  1; CLC# pass-thru WS input -> output
-;#define WSDO  2; CLC# generate composite WS data signal
-;#define ONESHOT  3; CLC# to generate one-shot 0.5 usec pulse triggered by WS data signal
+;//pin assignments:
+#define WSDI  RA3; //RA3 = WS input stream (from controller or previous WS281X pixels)
+#define BREAKOUT  RA0; //RA0 = WS breakout pixels, or simple LED for dev/debug
+#define LEDOUT  IIFDEBUG(SEG4OUT, -1); //RA5 = simple LED output; ONLY FOR DEV/DEBUG
+;#define WSCLK  4-2; //RA4 = WS input clock (recovered from WS input data signal); EUSART sync rcv clock needs a real I/O pin?
+#define SEG1OUT  RA1; //RA1 = WS output segment 1
+#define SEG2OUT  RA2; //RA2 = WS output segment 2
+#define SEG3OUT  RA#v(3+2); //RA5 = WS output segment 3; RA3 is input-only, use alternate pin for segment 3
+#define SEG4OUT  RA4; //RA4 = WS output segment 4
+;#define RGSWAP  0x321; //3 = R, 2 = G, 1 = B; default = 0x321 = RGB
+#define RGSWAP  0x231; //3 = R, 2 = G, 1 = B; default = 0x321 = RGB
+;//             default    test strip
+;//order 0x123: RGBYMCW => BRGMCYW
+;//order 0x132: RGBYMCW => RBGMYCW
+;//order 0x213: RGBYMCW => BGRCMYW
+;//order 0x231: RGBYMCW => RGBYMCW ==
+;//order 0x312: RGBYMCW => GBRCYMW
+;//order 0x321: RGBYMCW => GRBYCMW
+ messg [TODO] R is sending blue(3rd byte), G is sending red(first byte), B is sending green(second byte)
+;test strip is GRB order
 
     EXPAND_POP
     LIST_POP
     messg end of !hoist @__LINE__
-#undefine HOIST; preserve state for plumbing @eof
+#undefine HOIST; //preserve state for plumbing @eof
 #else
-#if HOIST == 4
+#if HOIST == 444; //OBSOLETE
     messg NO-hoist 4: fps tracking thread @__LINE__
     LIST_PUSH TRUE
     EXPAND_PUSH FALSE
 ;; fps tracking thread ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-#if 0; OBSOLETE; combined into rcv_frame thread for efficiency
+#if 0; //combined into rcv_frame thread for efficiency
     THREAD_DEF fps_tracking, 2
 
     nbDCL FPS_count,;
     nbDCL FPS_render,; save latest count so rendering can be done while counting frames
 
 fps_tracking: DROP_CONTEXT;
-;    fps_init 1 sec; do this in rcv_frame thread after running brkout_ani
+;    fps_init 1 sec; do this in rcv_frame thread after running brkout_anim
 ;    mov8 count_FPS, LITERAL(0); FPS will be junk until rcv_frame is finished startup
 fps_loop:
     mov8 FPS_render, FPS_count; rendered by brkout thread
@@ -152,7 +149,7 @@ fps_loop:
     messg end of hoist 4 @__LINE__
 ;#else; too deep :(
 #endif
-#if HOIST == 4444
+#if HOIST == 4444; //ABANDONED
     messg hoist 4: line conditioner (main logic) @__LINE__
     LIST_PUSH TRUE
     EXPAND_PUSH FALSE
@@ -166,7 +163,7 @@ line_conditioner: DROP_CONTEXT;
 loop: DROP_CONTEXT;
     wait2xmit YIELD, YIELD_AGAIN; wait before loading WREG to avoid save/restore
     mov8 TX1REG, WREG; start xmit
-    
+    goto line_conditioner;
     
     THREAD_END;
 
@@ -187,17 +184,26 @@ loop: DROP_CONTEXT;
 ;    messg #thr #v(NUM_THREADS), YIELD @__LINE__
 
 ;    init_more TRUE;
-;    call brkout_ani; call this during init
+;    call brkout_anim; call this during init
 ;    init_more FALSE;
+
+wait4timeout macro idler, idler2
+    idler; assume not ready yet, let other threads run
+    ifbit LITERAL(1), 0, FALSE, idler2; more efficient than goto $-3 + call
+    endm
+
 
 ;blink_1sec: DROP_CONTEXT;
 rcv_frame: DROP_CONTEXT;
-    CALL brkout_ani
+    CALL brkout_anim
     fps_init 1 sec
 rcv_loop: DROP_CONTEXT;
+    wait4timeout YIELD, YIELD_AGAIN;
     ifbit elapsed_fps, TRUE, CALL fps_update; render FPS 1x/sec during idle time at end of frame
     INCF FPS, F; assume !overflow; max FPS likely ~ 40 - 50
     messg TODO: wait for 50 usec, start rcv/xfr, trigger brkout render @__LINE__
+#if 1; dev/test
+    wait4frame YIELD, YIELD_AGAIN; 1 sec
     setbit LATA, LEDOUT, TRUE;
 ;    movlw 22;
 ;    BANKSAFE dest_arg(F) addwf FPS_render;
@@ -205,19 +211,21 @@ rcv_loop: DROP_CONTEXT;
     setbit LATA, LEDOUT, FALSE;
 ;    movlw 10;
 ;    BANKSAFE dest_arg(F) addwf FPS_render;
-    wait4frame YIELD, YIELD_AGAIN; 1 sec
+#endif
+;no    YIELD_AGAIN_inlined; only works if tos unchanged since yield!
     GOTO rcv_loop;
 
 
     nbDCL FPS,;
     CONSTANT FPS_RGBINX = CYAN_RGBINX; FPS
     CONSTANT FPS_RGBINX_ALT = MAGENTA_RGBINX; alternate FPS (heartbeat)
-    ERRIF(!((FPS_RGBINX ^ FPS_RGBINX_ALT) & RED_RGBINX), [ERROR] red bit #v(RED_RGBINX) can''t be used to check frame parity: #v(FPS_RGBINX ^ FPS_RGBINX_ALT) @__LINE__);
+    CONSTANT HEARTBEAT_PARITY = RED_RGBINX; use this bit to distinguish heartbeat parity
+    ERRIF(!((FPS_RGBINX ^ FPS_RGBINX_ALT) & HEARTBEAT_PARITY), [ERROR] heartbeat bit #v(HEARTBEAT_PARITY) can''t be used to check frame parity: #v(FPS_RGBINX ^ FPS_RGBINX_ALT) @__LINE__);
 
 set_fps_pxbit macro bitnum
-    BANKCHK brkoutpx;
-    messg TODO ^^^ fix banksel in ifbit @__LINE__
-    ifbit FPS, 7 - bitnum, TRUE, MOVWF brkoutpx + 24 + bitnum;
+;    BANKCHK brkoutpx;
+;    messg TODO ^^^ fix banksel in ifbit @__LINE__
+    ifbit IIF(bitnum == 7, LITERAL(0), FPS), 7 - bitnum, TRUE, MOVWF brkoutpx + 24 + bitnum;
     endm
 
 ;render FPS breakout px then reset:
@@ -227,9 +235,10 @@ fps_update: DROP_CONTEXT;
     REPEAT LITERAL(8), MOVWF brkoutpx + 24 + REPEATER; set "on" color
     MOVLW FPS_RGBINX;
     ifbit FPS, 7, TRUE, MOVLW FPS_RGBINX_ALT; kludge: use top bit for heartbeat color
+;    setbit FPS, 7, FALSE; strip heartbeat parity before render
     REPEAT LITERAL(8), set_fps_pxbit REPEATER; set "off" color
     CLRF FPS; restart frame count for next 1 sec
-    ifbit WREG, log2(RED_RGBINX), FPS_RGBINX & RED_RGBINX, biton_#v(7) FPS; toggle parity
+    ifbit WREG, log2(HEARTBEAT_PARITY), FPS_RGBINX & HEARTBEAT_PARITY, biton_#v(7) FPS; toggle parity
 ;    setbit elapsed_fps, FALSE;
     EXPAND_POP
     return;
@@ -257,82 +266,128 @@ fps_update: DROP_CONTEXT;
 ;    set_brkout_px 24+7, FPS, 0, WHITE_RGBINX, MAGENTA_RGBINX;
 
 
-;show a little animation on power-up:
-;NOTE: this interferes with FPS tracking; use only at startup
-;use FSR1 to set animation, FSR0 to send it
-brkout_ani: DROP_CONTEXT;
-;    call blink2;
-;    call breakout_reset;
-;    call wait_1sec;
-;    call blink2;
-;    fps_init 250 msec;
-    fps_init 100 msec; CAUTION: reusing FPS timer
-    mov16 FSR1, LITERAL(brkoutpx);
-    MOVLW OFF_RGBINX;
-off_loop: ;DROP_CONTEXT;
-    mov8 INDF1_postinc, WREG; LITERAL(OFF_RGBINX);
-;    ifbit FSR0L, log2(END_DETECT), !(ENDOF(brkoutpx) & END_DETECT), goto off_loop;
-    ifbit FSR1L, breakout_eof(FALSE), GOTO off_loop;
-    CALL ani_delay;
-#if 0
+#if 0; dev/debug test
     messg REMOVE THIS
     mov8 brkoutpx+0, LITERAL(RED_RGBINX);
-    CALL ani_delay;
+    CALL anim_delay;
     mov8 brkoutpx+8, LITERAL(GREEN_RGBINX);
-    CALL ani_delay;
+    CALL anim_delay;
     mov8 brkoutpx+16, LITERAL(BLUE_RGBINX);
-    CALL ani_delay;
+    CALL anim_delay;
     mov8 brkoutpx+24, LITERAL(YELLOW_RGBINX);
-    CALL ani_delay;
+    CALL anim_delay;
     mov8 brkoutpx+0, LITERAL(OFF_RGBINX);
     mov8 brkoutpx+8, LITERAL(OFF_RGBINX);
     mov8 brkoutpx+16, LITERAL(OFF_RGBINX);
     mov8 brkoutpx+24, LITERAL(OFF_RGBINX);
     return;
 #endif
-    mov16 FSR1, LITERAL(brkoutpx);
-red_ani: ;DROP_CONTEXT;
-    mov8 INDF1_postinc, LITERAL(RED_RGBINX);
-    CALL ani_delay;
-    ifbit FSR1L, log2(8), !((brkoutpx + 8) & 8), GOTO red_ani; still doing first byte
-green_ani: ;DROP_CONTEXT;
-    mov8 INDF1_postinc, LITERAL(GREEN_RGBINX);
-    CALL ani_delay;
-    ifbit FSR1L, log2(16), !((brkoutpx + 16) & 16), GOTO green_ani; still doing second byte
-blue_ani: ;DROP_CONTEXT;
-    mov8 INDF1_postinc, LITERAL(BLUE_RGBINX);
-    CALL ani_delay;
-    ifbit FSR1L, log2(8), !((brkoutpx + 24) & 8), GOTO blue_ani; still doing third byte
-fps_ani: ;DROP_CONTEXT;
-    mov8 INDF1_postinc, LITERAL(FPS_RGBINX);
-    CALL ani_delay;
-    ifbit FSR1L, log2(64), !((brkoutpx + 32) & 64), GOTO fps_ani; still doing fourth byte
-    fps_init 500 msec;
+
+
+;show a little animation on power-up:
+;turn on 1 breakout px at a time then alternate them a few times
+;NOTE: this interferes with FPS tracking; use only at startup
+;use FSR1 to set animation, FSR0 to send it
+brkout_anim: DROP_CONTEXT;
+#if 0; dev/test
+    fps_init 1 sec;
+    brkout_fill RED_RGBINX; //shows blue
+    CALL anim_delay;
+    brkout_fill OFF_RGBINX;
+    CALL anim_delay;
+    brkout_fill GREEN_RGBINX; //shows red
+    CALL anim_delay;
+    brkout_fill OFF_RGBINX;
+    CALL anim_delay;
+    brkout_fill BLUE_RGBINX; //shows green
+    CALL anim_delay;
+    brkout_fill OFF_RGBINX;
+    CALL anim_delay;
+    brkout_fill YELLOW_RGBINX; //shows blue
+    CALL anim_delay;
+    brkout_fill OFF_RGBINX;
+    CALL anim_delay;
+    brkout_fill MAGENTA_RGBINX; //shows red
+    CALL anim_delay;
+    brkout_fill OFF_RGBINX;
+    CALL anim_delay;
+    brkout_fill CYAN_RGBINX; //shows green
+    CALL anim_delay;
+    brkout_fill OFF_RGBINX;
+    CALL anim_delay;
+    brkout_fill WHITE_RGBINX;
+    CALL anim_delay;
+    GOTO all_off;
+#endif
+    fps_init 1 sec / 32; 100 msec; CAUTION: reusing FPS timer
+    CALL all_off;
+    mov16 FSR1, LITERAL(brkoutpx); //rewind
+red_anim: ;DROP_CONTEXT;
+    mov8 INDF1_postinc, LITERAL(RED_RGBINX); //turn on 1/@time
+    CALL anim_delay;
+    ifbit FSR1L, log2(8), !((brkoutpx + 8) & 8), GOTO red_anim; still doing first byte
+green_anim: ;DROP_CONTEXT;
+    mov8 INDF1_postinc, LITERAL(GREEN_RGBINX); //turn on 1/@time
+    CALL anim_delay;
+    ifbit FSR1L, log2(16), !((brkoutpx + 16) & 16), GOTO green_anim; still doing second byte
+blue_anim: ;DROP_CONTEXT;
+    mov8 INDF1_postinc, LITERAL(BLUE_RGBINX); //turn on 1/@time
+    CALL anim_delay;
+    ifbit FSR1L, log2(8), !((brkoutpx + 24) & 8), GOTO blue_anim; still doing third byte
+fps_anim: ;DROP_CONTEXT;
+    mov8 INDF1_postinc, LITERAL(FPS_RGBINX); //turn on 1/@time
+    CALL anim_delay;
+    ifbit FSR1L, log2(64), !((brkoutpx + 32) & 64), GOTO fps_anim; still doing fourth byte
+#if 0
+    fps_init 1 sec; 500 msec;
 alt_loop:
     MOVLW WHITE_RGBINX;
-    REPEAT LITERAL(32/2), MOVWF brkoutpx + REPEATER * 2; set "on" color every other px
-    CALL ani_delay;
-    REPEAT LITERAL(32/2), swap_pair REPEATER * 2; alternate
-    CALL ani_delay;
-    REPEAT LITERAL(32/2), swap_pair REPEATER * 2; alternate
-    CALL ani_delay;
-;    goto breakout_reset; leave brkoutpx initialized to "off" color
-;    fps_init 1 sec; restore FPS timer
-    return;
+    REPEAT LITERAL(SIZEOF(brkoutpx) / 2), MOVWF brkoutpx + REPEATER * 2; set "on" color every other px
+    CALL anim_delay;
+    REPEAT LITERAL(SIZEOF(brkoutpx) / 2), swap_pair REPEATER * 2; alternate
+    CALL anim_delay;
+    REPEAT LITERAL(SIZEOF(brkoutpx) / 2), swap_pair REPEATER * 2; alternate
+    CALL anim_delay;
+    REPEAT LITERAL(SIZEOF(brkoutpx) / 2), swap_pair REPEATER * 2; alternate
+    CALL anim_delay;
+    REPEAT LITERAL(SIZEOF(brkoutpx) / 2), swap_pair REPEATER * 2; alternate
+    CALL anim_delay;
+#endif
+;    CALL all_off; leave brkout px initialized to all "off" color
+;    return;
+    mov16 FSR1, LITERAL(brkoutpx); //rewind
+off_anim: ;DROP_CONTEXT;
+    mov8 INDF1_postinc, LITERAL(OFF_RGBINX); //turn on 1/@time
+    CALL anim_delay;
+    ifbit FSR1L, log2(64), !((brkoutpx + 32) & 64), GOTO off_anim; still doing fourth byte
+;fall thru ...
 
+;turn all breakout px off and display for 1 frame:
+all_off: DROP_CONTEXT;
+;    mov16 FSR1, LITERAL(brkoutpx);
+;    MOVLW OFF_RGBINX;
+;off_loop: ;DROP_CONTEXT;
+;    mov8 INDF1_postinc, WREG; LITERAL(OFF_RGBINX);
+;;    ifbit FSR0L, log2(END_DETECT), !(ENDOF(brkoutpx) & END_DETECT), goto off_loop;
+;    ifbit FSR1L, breakout_eof(FALSE), GOTO off_loop;
+;    whilebit FSR1L, breakout_eof(FALSE), MOVWF INDF1_postinc;
+;    CALL anim_delay;
+;    return
+    brkout_fill OFF_RGBINX;
+;fall thru ...
 
 ;send breakout px then delay for animation:
-ani_delay: DROP_CONTEXT;
+anim_delay: DROP_CONTEXT;
 ;    call brkoutpx_sendall;
 ;    mov16 FSR0, LITERAL(brkoutpx);
     render_busy TRUE;
-;ani_loop: DROP_CONTEXT
+;anim_loop: DROP_CONTEXT
 ;    mov8 WREG, INDF0_postinc
 ;    call ws_send_palette
 ;    wait_msec 100,; animation speed
 ;    whilebit elapsed_fps, FALSE, ;goto no_fps_update
     wait4frame YIELD, YIELD_AGAIN; 1/10 sec; assume breakout is written by now (takes < 1 msec)
-;    ifbit FSR0L, log2(64), !((brkoutpx + 32) & 64), goto ani_loop; send more breakout px
+;    ifbit FSR0L, log2(64), !((brkoutpx + 32) & 64), goto anim_loop; send more breakout px
     return;
 
     THREAD_END;
@@ -370,20 +425,20 @@ ani_delay: DROP_CONTEXT;
 ;use EQU to show 32 bit values in .LST
 ;primary colors (dim):
 PALETTE_#v(OFF_RGBINX) EQU LITERAL(0); off
-PALETTE_#v(RED_RGBINX) EQU LITERAL(0x000200); red dim
-PALETTE_#v(GREEN_RGBINX) EQU LITERAL(0x020000); green dim
+PALETTE_#v(RED_RGBINX) EQU LITERAL(0x020000); red dim
+PALETTE_#v(GREEN_RGBINX) EQU LITERAL(0x000200); green dim
 PALETTE_#v(YELLOW_RGBINX) EQU LITERAL(0x010100); yellow dim; try to keep consistent brightness with single colors
 PALETTE_#v(BLUE_RGBINX) EQU LITERAL(0x000002); blue dim
-PALETTE_#v(MAGENTA_RGBINX) EQU LITERAL(0x000101); magenta dim; try to keep consistent brightness with single colors
-PALETTE_#v(CYAN_RGBINX) EQU LITERAL(0x010001); cyan dim; try to keep consistent brightness with single colors
+PALETTE_#v(MAGENTA_RGBINX) EQU LITERAL(0x010001); magenta dim; try to keep consistent brightness with single colors
+PALETTE_#v(CYAN_RGBINX) EQU LITERAL(0x000101); cyan dim; try to keep consistent brightness with single colors
 PALETTE_#v(WHITE_RGBINX) EQU LITERAL(0x010101); white dim; try to keep consistent brightness with single colors
 ;primary colors (bright):
-PALETTE_#v(BRIGHT(RED_RGBINX)) EQU LITERAL(0x00FF00); red bright
-PALETTE_#v(BRIGHT(GREEN_RGBINX)) EQU LITERAL(0xFF0000); green bright
+PALETTE_#v(BRIGHT(RED_RGBINX)) EQU LITERAL(0xFF0000); red bright
+PALETTE_#v(BRIGHT(GREEN_RGBINX)) EQU LITERAL(0x00FF00); green bright
 PALETTE_#v(BRIGHT(YELLOW_RGBINX)) EQU LITERAL(0x808000); yellow bright; try to keep consistent brightness with single colors
 PALETTE_#v(BRIGHT(BLUE_RGBINX)) EQU LITERAL(0x0000FF); blue bright
-PALETTE_#v(BRIGHT(MAGENTA_RGBINX)) EQU LITERAL(0x008080); magenta bright; try to keep consistent brightness with single colors
-PALETTE_#v(BRIGHT(CYAN_RGBINX)) EQU LITERAL(0x800080); cyan bright; try to keep consistent brightness with single colors
+PALETTE_#v(BRIGHT(MAGENTA_RGBINX)) EQU LITERAL(0x800080); magenta bright; try to keep consistent brightness with single colors
+PALETTE_#v(BRIGHT(CYAN_RGBINX)) EQU LITERAL(0x008080); cyan bright; try to keep consistent brightness with single colors
 PALETTE_#v(BRIGHT(WHITE_RGBINX)) EQU LITERAL(0x555555); white dim; try to keep consistent brightness with single colors
 PALETTE_#v(CUSTOM_RGBINX) EQU ccolor; caller-defined palette entry
 
@@ -504,6 +559,12 @@ palinx += 1;
 ;    ws_breakout_setup;
 ;    init_more FALSE;
 
+brkout_fill macro color
+    mov16 FSR1, LITERAL(brkoutpx);
+    MOVLW color;
+    whilebit FSR1L, breakout_eof(FALSE), MOVWF INDF1_postinc;
+    endm
+
 ;use FSR0 to send breakout, leave FSR1 for caller to use for animation or render
 brkout_render: DROP_CONTEXT;
     ws_breakout_setup; eusart init @SPI 3x (2.4 Mbps)
@@ -518,7 +579,7 @@ brkout_loop: DROP_CONTEXT;
 ;    NOP 16
 ;    ifbit FSR0L, breakout_eof(TRUE), YIELD; goto brkout_wait; log2(64), !((brkoutpx + 32) & 64), goto brkout_loop; nothing to send
 ;    ifbit FSR0L, breakout_eof(TRUE), YIELD_AGAIN; goto brkout_wait; log2(64), !((brkoutpx + 32) & 64), goto brkout_loop; nothing to send
-    wait2render YIELD, YIELD_AGAIN; only yield 1x/breakout px; this prevents unexpected gaps during WS xmit (seems to be okay *between* WS px); breakout px only needs to be rendered when rcv_frame is idle (at end of frame)
+    wait2render YIELD, YIELD_AGAIN; only yield 1x/breakout px; this prevents unexpected gaps during WS xmit (better tolerated *between* WS px); breakout px only needs to be rendered when rcv_frame is idle (at end of frame)
     VARIABLE pxpiece = 0;
     while pxpiece < 3*3; each px takes 9 bytes (3 rgb bytes * 3 SPI bytes)
 ;        wait2xmit YIELD, YIELD_AGAIN; wait before loading WREG to avoid save/restore
@@ -531,6 +592,7 @@ brkout_loop: DROP_CONTEXT;
 pxpiece += 1
     endw
     GOTO brkout_loop;
+;no    YIELD_AGAIN_inlined; only works if tos unchanged since yield!
 
 
 generate_get_palent macro
@@ -582,6 +644,15 @@ palpiece += 1
     LIST_PUSH FALSE; TRUE
     EXPAND_PUSH FALSE
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;TODO: update this:
+;peripherals:
+;NOTE: PPS is locked and each WS output segment has its own CLC to copy RA3, rather than changing PPS all the time
+;#define WSSYNC  3; PWM# generate WS data sync pulse
+;#define WSPASS  1; CLC# pass-thru WS input -> output
+;#define WSDO  2; CLC# generate composite WS data signal
+;#define ONESHOT  3; CLC# to generate one-shot 0.5 usec pulse triggered by WS data signal
+
 
 ;; WS281X stream input ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
     
@@ -739,7 +810,7 @@ wait2xmit macro idler, idler2
     endm
 
 
-#define RGB_ORDER(n)  RGB_#v(n); (n) % 3)
+#define RGB_ORDER(n)  RGB_#v(n); (n) % 3); controls byte order (BYTEOF)
 #ifdef RGSWAP; set color order
 ;line too long :( #define RGB_ORDER(n)  (((RGSWAP >> (8 - 4 * (n))) & 0xF) - 1)
     CONSTANT RGB_#v(0) = (((RGSWAP >> 8) & 0xF) - 1);
@@ -773,15 +844,21 @@ ws_send_px macro rgb24, wait_first, first_idler, more_idler
 ; messg HIBYTE(rgb24)
 ; messg MIDBYTE(rgb24)
 ; messg LOBYTE(rgb24)
-    LOCAL HI;
-HI = HIBYTE(rgb24); line too long :(
-    LOCAL MID;
-MID = MIDBYTE(rgb24);
-    LOCAL LO;
-LO = LOBYTE(rgb24);
-    ws_send_byte HI_BYTE, wait_first, first_idler, more_idler; REGHI(rgb24);
-    ws_send_byte MID, wait_first, first_idler, more_idler; REGMID(rgb24);
-    ws_send_byte LO_BYTE, wait_first, first_idler, more_idler; REGLO(rgb24);
+;    LOCAL HI;
+;HI = HIBYTE(rgb24); line too long :(
+;    LOCAL MID;
+;MID = MIDBYTE(rgb24);
+;    LOCAL LO;
+;LO = LOBYTE(rgb24);
+    LOCAL FIRST_BYTE
+FIRST_BYTE = BYTEOF(rgb24, RGB_ORDER(0));
+    LOCAL MID_BYTE
+MID_BYTE = BYTEOF(rgb24, RGB_ORDER(1));
+    LOCAL LAST_BYTE
+LAST_BYTE = BYTEOF(rgb24, RGB_ORDER(2));
+    ws_send_byte FIRST_BYTE, wait_first, first_idler, more_idler; REGHI(rgb24);
+    ws_send_byte MID_BYTE, wait_first, first_idler, more_idler; REGMID(rgb24);
+    ws_send_byte LAST_BYTE, wait_first, first_idler, more_idler; REGLO(rgb24);
     endm
 
 
@@ -1006,7 +1083,6 @@ BYTE = WSENC_TEMP;
 
 ;    nbDCL FPS,; breakout value (used as counter until breakout is refreshed)
 ;    nbDCL numfr,; internal counter
-
 
 ;set up recurring frames:
 ;uses Timer 0 rollover as recurring 1 sec elapsed timer
@@ -1259,16 +1335,21 @@ yield_again set yield_again_#v(NUM_THREADS); alias for caller
 #ifdef RERUN_THREADS
 ;    CALL (NUM_THREADS << (4+8)) | thread_wrapper_#v(NUM_THREADS)); set active thread# + statup addr
     CALL stack_alloc_#v(NUM_THREADS); kludge: put thread_wrapper ret addr onto stack; doesn't return until yield
-thread_wrapper_#v(NUM_THREADS): DROP_CONTEXT;
+;thread_wrapper_#v(NUM_THREADS): DROP_CONTEXT;
+;    LOCAL rerun_thr;
+;rerun_thr:
     CALL thread_body; start executing thread; allows thread to return but uses extra stack level
 #if !RERUN_THREADS
     YIELD; call yield_from_#v(NUM_THREADS) ;bypass dead (returned) threads in round robin yields
 #endif
-    GOTO $-1; re-run thread or just yield to other threads
+;    GOTO IIF(RERUN_THREADS, rerun_thr, yield_again); $-1; re-run thread or just yield to other threads
+    YIELD_AGAIN; stack_alloc does same thing as yield_from
 #else
-    messg TODO: put CALL stack_alloc < thread_body
-thread_wrapper_#v(NUM_THREADS) EQU thread_body; onthread(NUM_THREADS, thread_body); begin executing thread; doesn't use any stack but thread can never return!
+;    error [TODO] put "CALL stack_alloc" < "thread_body" @__LINE__
+;thread_wrapper_#v(NUM_THREADS) EQU thread_body; onthread(NUM_THREADS, thread_body); begin executing thread; doesn't use any stack but thread can never return!
 ;    goto thread_body; begin executing thread; doesn't use any stack but thread can never return!
+    PUSH thread_body;
+;    GOTO stack_alloc_#v(NUM_THREADS); kludge: put thread_wrapper ret addr onto stack; doesn't return until yield
 #endif
 ;alloc + stack + set initial addr:
 ;NOTE: thread doesn't start execeuting until all threads are defined (to allow yield to auto-start threads)
@@ -1302,6 +1383,7 @@ stack_alloc_#v(NUM_THREADS): DROP_CONTEXT;
 	ADDWF STKPTR, F; alloc stack space to thread
     endif
 ;    goto create_thread_#v(NUM_THREADS - 1); daisy-chain: create previous thread; CAUTION: use goto - don't want to change STKPTR here!
+  messg [DEBUG] #v(BANK_TRACKER) @__LINE__
     init_more FALSE;
 ;    messg "YIELD = " YIELD @__LINE__
 NUM_THREADS += 1; do this at start so it will remain validate within thread body; use non-0 for easier PCLATH debug; "thread 0" == prior to thread xition
@@ -1326,6 +1408,14 @@ IN_THREAD = FALSE;
 ;    EXPAND_POP
     endm
 
+
+;in-lined YIELD_AGAIN:
+;occupies 2-3 words in prog space but avoids extra "goto" (2 instr cycles) on context changes at run time
+;CAUTION: returns to previous YIELD, not code following
+YIELD_AGAIN_inlined macro
+    mov8 STKPTR, stkptr_#v(NUM_THREADS); round robin
+    EMIT return; return early if banksel !needed; more efficient than nop
+    endm
 
 ;create + execute threads:
 ;once threads are created, execution jumps to ukernel (via first thread) and never returns
@@ -1366,7 +1456,7 @@ IN_THREAD = FALSE;
 
 eof_#v(EOF_COUNT) macro
 ;    EXPAND_PUSH FALSE
-    messg [INFO] #threads: #v(NUM_THREADS), stack space needed: #v(STK_ALLOC), unalloc: #v(HOST_STKLEN - STK_ALLOC) @__LINE__
+;    messg [INFO] #threads: #v(NUM_THREADS), stack space needed: #v(STK_ALLOC), unalloc: #v(HOST_STKLEN - STK_ALLOC) @__LINE__
 ;optimize special cases:
 ;    if NUM_THREADS == 1
 ;	messg TODO: bypass yield (only 1 thread) @__LINE__
@@ -1377,10 +1467,14 @@ eof_#v(EOF_COUNT) macro
 ;start executing first thread; other threads will start as yielded to
 ;CAUTION: never returns
     if NUM_THREADS
+        messg [INFO] #threads: #v(NUM_THREADS), stack alloc: #v(STK_ALLOC)/#v(HOST_STKLEN) (#v(pct(STK_ALLOC, HOST_STKLEN))%) @__LINE__
+stkptr_#v(NUM_THREADS) EQU stkptr_#v(0); wrap-around for round robin yield
 ;stkptr_#v(NUM_THREADS) SET stkptr_#v(0); wrap-around for round robin yield; NOTE: latest thread overwrites this
-	EMITL start_threads:; only used for debug
-	mov8 STKPTR, stkptr_#v(0); NUM_THREADS); % MAX_THREADS); #v(curthread + 1); round robin
-	EMIT return;
+;	EMITL start_threads:; only used for debug
+;	mov8 STKPTR, stkptr_#v(NUM_THREADS); % MAX_THREADS); #v(curthread + 1); round robin
+;	EMIT return;
+  messg [DEBUG] why is banksel needed here? #v(BANK_TRACKER) @__LINE__
+	YIELD_AGAIN_inlined; start first thread
     endif
 ;unneeded? generic yield:
 ;allows code sharing between threads, but adds extra run-time overhead (6 instr cycle per yield)
@@ -1406,7 +1500,7 @@ eof_#v(EOF_COUNT) macro
 ;	ORG yield_from_#v(yield_thread)_placeholder
         CONTEXT_RESTORE yield_placeholder_#v(yield_thread)
 here = $	
-	mov8 STKPTR, stkptr_#v((yield_thread + 1) % NUM_THREADS); round robin wraps around
+	mov8 STKPTR, stkptr_#v(yield_thread + 1); (yield_thread + 1) % NUM_THREADS); round robin wraps around
 	if $ < here + 2+1
 	    EMIT return; return early if banksel !needed; more efficient than nop
 	endif
@@ -2029,9 +2123,15 @@ RAM_USED#v(bank) = NEXT_RAM#v(bank) - RAM_START#v(bank); BOOL2INT(banked))
     ENDM
 
 eof_#v(EOF_COUNT) macro
-    messg [INFO] bank0 used: #v(RAM_USED#v(0))/#v(RAM_LEN#v(0)) (#v(pct(RAM_USED#v(0), RAM_LEN#v(0)))%) @__LINE__
-    MESSG [INFO] bank1 used: #v(RAM_USED#v(1))/#v(RAM_LEN#v(1)) (#v(pct(RAM_USED#v(1), RAM_LEN#v(1)))%) @__LINE__
-    MESSG [INFO] non-banked used: #v(RAM_USED#v(NOBANK))/#v(RAM_LEN#v(NOBANK)) (#v(pct(RAM_USED#v(NOBANK), RAM_LEN#v(NOBANK)))%) @__LINE__
+    if RAM_USED#v(0)
+        messg [INFO] bank0 used: #v(RAM_USED#v(0))/#v(RAM_LEN#v(0)) (#v(pct(RAM_USED#v(0), RAM_LEN#v(0)))%) @__LINE__
+    endif
+    if RAM_USED#v(1)
+	MESSG [INFO] bank1 used: #v(RAM_USED#v(1))/#v(RAM_LEN#v(1)) (#v(pct(RAM_USED#v(1), RAM_LEN#v(1)))%) @__LINE__
+    endif
+    if RAM_USED#v(NOBANK)
+        MESSG [INFO] non-banked used: #v(RAM_USED#v(NOBANK))/#v(RAM_LEN#v(NOBANK)) (#v(pct(RAM_USED#v(NOBANK), RAM_LEN#v(NOBANK)))%) @__LINE__
+    endif
     endm
 EOF_COUNT += 1;
 
@@ -2053,7 +2153,7 @@ EOF_COUNT += 1;
 
 
 ;pseudo-reg:
-;these have special meaning for mov8
+;these have special meaning for mov8/MOVV/MOVWF
     CONSTANT INDF1_special = 0x10000;
     CONSTANT INDF1_preinc = (INDF1_special + 0); moviw ++INDF1
     CONSTANT INDF1_predec = (INDF1_special + 1); moviw --INDF1
@@ -2119,46 +2219,49 @@ mov8 macro dest, src
 ;WREG_TRACKER = src
 	endif
     else ;register
-;special pseudo-reg:
-	if src & INDF0_special
-;	    EXPAND_RESTORE; NOEXPAND
-	    EMIT MOVIW_opc(FSR0, SRC);
-;	    NOEXPAND  ;reduce clutter
-	else
-	    if src & INDF1_special
-;	        EXPAND_RESTORE; NOEXPAND
-		EMIT MOVIW_opc(FSR1, SRC);
-;		NOEXPAND  ;reduce clutter
-	    else
-		if (SRC != WREG) && (SRC != WREG_TRACKER)
-;		    BANKCHK src;
-;		    BANKSAFE dest_arg(W) movf src;, W;
-;WREG_TRACKER = src
-		    MOVF src, W;
-;		else
-;		    if (SRC == WREG) && (WREG_TRACKER == WREG_UNKN)
-;			messg [WARNING] WREG contents unknown here @__LINE__
-;		    endif
-		endif
-	    endif
+	if (SRC != WREG) && (SRC != WREG_TRACKER)
+	    MOVF src, W;
 	endif
+;special pseudo-reg:
+;	if src & INDF0_special
+;;	    EXPAND_RESTORE; NOEXPAND
+;	    EMIT MOVIW_opc(FSR0, SRC);
+;;	    NOEXPAND  ;reduce clutter
+;	else
+;	    if src & INDF1_special
+;;	        EXPAND_RESTORE; NOEXPAND
+;		EMIT MOVIW_opc(FSR1, SRC);
+;;		NOEXPAND  ;reduce clutter
+;	    else
+;		if (SRC != WREG) && (SRC != WREG_TRACKER)
+;;		    BANKCHK src;
+;;		    BANKSAFE dest_arg(W) movf src;, W;
+;;WREG_TRACKER = src
+;		    MOVF src, W;
+;;		else
+;;		    if (SRC == WREG) && (WREG_TRACKER == WREG_UNKN)
+;;			messg [WARNING] WREG contents unknown here @__LINE__
+;;		    endif
+;		endif
+;	    endif
+;	endif
     endif
-    if dest & INDF0_special
-;        EXPAND_RESTORE; NOEXPAND
-	EMIT MOVWI_opc(FSR0, dest);
-;	NOEXPAND  ;reduce clutter
-    else
-	if dest & INDF1_special
-;	    EXPAND_RESTORE; NOEXPAND
-	    EMIT MOVWI_opc(FSR1, dest);
-;	    NOEXPAND  ;reduce clutter
-	else
-	    if dest != WREG
-;		BANKCHK dest;
-;		BANKSAFE movwf dest; NOARG
-		MOVWF dest;
-	    endif
-        endif
+;    if dest & INDF0_special
+;;        EXPAND_RESTORE; NOEXPAND
+;	EMIT MOVWI_opc(FSR0, dest);
+;;	NOEXPAND  ;reduce clutter
+;    else
+;	if dest & INDF1_special
+;;	    EXPAND_RESTORE; NOEXPAND
+;	    EMIT MOVWI_opc(FSR1, dest);
+;;	    NOEXPAND  ;reduce clutter
+;	else
+    if dest != WREG
+;;		BANKCHK dest;
+;;		BANKSAFE movwf dest; NOARG
+	MOVWF dest;
+;	    endif
+;        endif
     endif
 ;    EXPAND_POP
     endm
@@ -2230,8 +2333,22 @@ WREG_TRACKER = LITERAL(0);
 #define MOVWF  movwf_banksafe
 MOVWF macro reg
 ;    EXPAND_PUSH FALSE
-    BANKCHK reg
-    BANKSAFE EMIT movwf reg;
+    if (reg) & INDF0_special
+;        EXPAND_RESTORE; NOEXPAND
+	EMIT MOVWI_opc(FSR0, reg);
+;	NOEXPAND  ;reduce clutter
+    else
+	if (reg) & INDF1_special
+;	    EXPAND_RESTORE; NOEXPAND
+	    EMIT MOVWI_opc(FSR1, reg);
+;	    NOEXPAND  ;reduce clutter
+	else
+;	    if reg != WREG
+	    BANKCHK reg;
+;		BANKSAFE movwf dest; NOARG
+	    BANKSAFE EMIT movwf reg;
+	endif
+    endif
 ;    EXPAND_POP
     endm
 
@@ -2239,11 +2356,26 @@ MOVWF macro reg
 #define MOVF  movf_banksafe
 MOVF macro reg, dest
 ;    EXPAND_PUSH FALSE
-    BANKCHK reg
-    BANKSAFE EMIT dest_arg(dest) movf reg;, dest;
-;    if (reg == WREG) || !BOOL2INT(dest)
-    if !BOOL2INT(dest)
+    if ((reg) & INDF0_special) && !BOOL2INT(dest)
+;	    EXPAND_RESTORE; NOEXPAND
+	EMIT MOVIW_opc(FSR0, reg);
+;	    NOEXPAND  ;reduce clutter
+WREG_TRACKER = WREG_UNKN;
+    else
+	if ((reg) & INDF1_special) && !BOOL2INT(dest)
+;	        EXPAND_RESTORE; NOEXPAND
+	    EMIT MOVIW_opc(FSR1, reg);
+;		NOEXPAND  ;reduce clutter
+WREG_TRACKER = WREG_UNKN;
+	else
+;	    if (SRC != WREG) && (SRC != WREG_TRACKER)
+	    BANKCHK reg;
+	    BANKSAFE EMIT dest_arg(dest) movf reg;, dest;
+;WREG_TRACKER = src
+	    if !BOOL2INT(dest); || (reg == WREG)
 WREG_TRACKER = reg; IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+	    endif
+	endif
     endif
 ;    EXPAND_POP
     endm
@@ -2743,7 +2875,7 @@ NUM_IFBIT += 1; kludge: need unique labels
 ;wait for bit:
 ;optimized for shortest loop
 whilebit macro reg, bitnum, bitval, idler
-;    EXPAND_PUSH FALSE
+    EXPAND_PUSH FALSE
     LOCAL loop, around
     EMITL loop:
     if ISLIT(reg); bit won't change; do idler forever or never
@@ -2754,18 +2886,18 @@ whilebit macro reg, bitnum, bitval, idler
 	    GOTO loop;
 ;	    EXPAND_POP
 	endif
-;        EXPAND_POP
+        EXPAND_POP
 	exitm
     endif
     LOCAL NUM_WHILEBIT = NUM_CONTEXT; kludge: need unique symbols
     BANKCHK reg; allow this to be skipped in loop
-    LOCAL before_addr = $, before_bank = BANK_TRACKER;, before_wreg = WREG_TRACKER
+    LOCAL before_idler = $, before_bank = BANK_TRACKER;, before_wreg = WREG_TRACKER
     CONTEXT_SAVE before_#v(NUM_WHILEBIT)
-    ORG before_addr + 2; leave placeholder for btf + goto; backfill after checking for idler
+    ORG before_idler + 2; leave placeholder for btf + goto; backfill after checking for idler
 ;    EXPAND_POP
     EMIT idler; allows cooperative multi-tasking (optional)
 ;    EXPAND_PUSH FALSE
-    LOCAL after_addr = $, after_bank = BANK_TRACKER;, after_wreg = WREG_TRACKER
+    LOCAL after_idler = $, after_bank = BANK_TRACKER;, after_wreg = WREG_TRACKER
     CONTEXT_SAVE after_#v(NUM_WHILEBIT)
     LOCAL bank_changed = BANKOF(after_bank);
 bank_changed -= BANKOF(before_bank); line too long :(
@@ -2773,20 +2905,20 @@ bank_changed -= BANKOF(before_bank); line too long :(
 ;BANK_TRACKER = before_bank
 ;WREG_TRACKER = before_wreg
     CONTEXT_RESTORE before_#v(NUM_WHILEBIT)
-    if after_addr == before_addr + 2; no idler, use tight busy-wait (3 instr)
-    	ifbit reg, bitnum, FALSE, GOTO before_addr; don't need to repeat banksel
-	ERRIF($ != before_addr + 2, [ERROR] tight-while bit test size wrong: #v($ - (before_addr + 2)) @__LINE__);
+    if after_idler == before_idler + 2; no idler, use tight busy-wait (3 instr)
+    	ifbit reg, bitnum, bitval, GOTO before_idler; don't need to repeat banksel
+	ERRIF($ != before_idler + 2, [ERROR] tight-while bit test size wrong: #v($ - (before_idler + 2)) @__LINE__);
     else; jump around idler
-	ifbit reg, bitnum, !BOOL2INT(bitval), goto around
-	ERRIF($ != before_addr + 2, [ERROR] bulky-while bit test size wrong: #v($ - (before_addr + 2)) @__LINE__);
+	ifbit reg, bitnum, !BOOL2INT(bitval), GOTO around; check for *opposite* bit val
+	ERRIF($ != before_idler + 2, [ERROR] bulky-while bit test size wrong: #v($ - (before_idler + 2)) @__LINE__);
 ;	ORG after_addr
 ;BANK_TRACKER = after_bank
 ;WREG_TRACKER = after_wreg
 	CONTEXT_RESTORE after_#v(NUM_WHILEBIT)
-	GOTO IIF(bank_changed, before_addr, loop);
-	EMITL around:
+	GOTO IIF(bank_changed, loop, before_idler);
     endif
-;    EXPAND_POP
+    EMITL around:
+    EXPAND_POP
     endm
 
 
@@ -2967,7 +3099,9 @@ PAGE_TRACKER = dest;
 
 
 eof_#v(EOF_COUNT) macro
-    messg [INFO] page sel: #v(PAGESEL_KEEP) (#v(pct(PAGESEL_KEEP, PAGESEL_KEEP + PAGESEL_DROP))%), dropped: #v(PAGESEL_DROP) (#v(pct(PAGESEL_DROP, PAGESEL_KEEP + PAGESEL_DROP))%) @__LINE__; ;perf stats
+    if PAGESEL_KEEP + PAGESEL_DROP
+        messg [INFO] page sel: #v(PAGESEL_KEEP) (#v(pct(PAGESEL_KEEP, PAGESEL_KEEP + PAGESEL_DROP))%), dropped: #v(PAGESEL_DROP) (#v(pct(PAGESEL_DROP, PAGESEL_KEEP + PAGESEL_DROP))%) @__LINE__; ;perf stats
+    endif
     messg [INFO] page0 used: #v(EOF_ADDR)/#v(LIT_PAGELEN) (#v(pct(EOF_ADDR, LIT_PAGELEN))%) @__LINE__
     endm
 EOF_COUNT += 1;
@@ -3070,7 +3204,9 @@ PASS2_FIXUPS += 0x10000+(pass2ofs)  ;lower word = #prog words; upper word = #tim
     ENDM
 
 eof_#v(EOF_COUNT) macro
-    messg [INFO] Ugly fixups pass1: #v(PASS1_FIXUPS/0x10000):#v(PASS1_FIXUPS%0x10000), pass2: #v(PASS2_FIXUPS/0x10000):#v(PASS2_FIXUPS%0x10000) @__LINE__
+    if PASS1_FIXUPS + PASS2_FIXUPS
+	messg [INFO] Ugly fixups pass1: #v(PASS1_FIXUPS/0x10000):#v(PASS1_FIXUPS%0x10000), pass2: #v(PASS2_FIXUPS/0x10000):#v(PASS2_FIXUPS%0x10000) @__LINE__
+    endif
     endm
 EOF_COUNT += 1;
 
@@ -3104,7 +3240,10 @@ EOF_COUNT += 1;
 ;helps with compile-time optimizations
 ;line too long: #define IIF(TF, tval, fval)  (BOOL2INT(TF) * (tval) + (!BOOL2INT(TF)) * (fval))
 ;only eval TF once, but requires shorter fval (with no side effects):
-#define IIF(TF, tval, fval)  (BOOL2INT(TF) * ((tval) - (fval)) + (fval))
+;#define IIF(TF, tval, fval)  (BOOL2INT(TF) * ((tval) - (fval)) + (fval))
+#define IIF(TF, tval, fval)  IIF_#v(BOOL2INT(TF))(tval, fval)
+#define IIF_1(tval, fval)  (tval); IIF_#v(TRUE)
+#define IIF_0(tval, fval)  (fval); IIF_#v(FALSE)
 
 
 ;misc arithmetic helpers:
@@ -3323,7 +3462,7 @@ MEXPAND_DEPTH -= 1; keep track of current nesting level
     ENDM
 
 eof_#v(EOF_COUNT) macro
-    LOCAL nested = 1; kludge: account for at_eof wrapper
+    LOCAL nested = 0; 1; kludge: account for at_eof wrapper
     WARNIF(MEXPAND_DEPTH != nested, [WARNING] macro expand stack not empty @eof: #v(MEXPAND_DEPTH - nested)"," stack = #v(MEXPAND_STACK) @__LINE__); mismatched directives can cause incorrect code gen
     endm
 EOF_COUNT += 1;
