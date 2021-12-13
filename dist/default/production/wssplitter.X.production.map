@@ -1,0 +1,201 @@
+MPLINK 5.09, LINKER
+Linker Map File - Created Mon Dec 13 08:06:51 2021
+
+                                 Section Info
+                  Section       Type    Address   Location Size(Bytes)
+                ---------  ---------  ---------  ---------  ---------
+                   .org_1       code   0x000000    program   0x000002
+                   .org_0       code   0x000000    program   0x000000
+                   .org_3       code   0x000001    program   0x000004
+                   .org_2       code   0x000003    program   0x00000c
+                   .org_4       code   0x000009    program   0x000030
+                  .org_41       code   0x000021    program   0x000002
+                   .org_5       code   0x000022    program   0x000008
+                   .org_6       code   0x000026    program   0x000004
+                   .org_7       code   0x000028    program   0x000008
+                   .org_8       code   0x00002c    program   0x000004
+                   .org_9       code   0x00002e    program   0x000008
+                  .org_10       code   0x000032    program   0x000004
+                  .org_11       code   0x000034    program   0x000008
+                  .org_12       code   0x000038    program   0x000004
+                  .org_13       code   0x00003a    program   0x000008
+                  .org_14       code   0x00003e    program   0x000004
+                  .org_15       code   0x000040    program   0x000008
+                  .org_16       code   0x000044    program   0x000004
+                  .org_17       code   0x000046    program   0x000008
+                  .org_18       code   0x00004a    program   0x000004
+                  .org_19       code   0x00004c    program   0x000008
+                  .org_20       code   0x000050    program   0x00000c
+                  .org_21       code   0x000056    program   0x000004
+                  .org_22       code   0x000058    program   0x000008
+                  .org_23       code   0x00005c    program   0x000004
+                  .org_24       code   0x00005e    program   0x000008
+                  .org_25       code   0x000062    program   0x000004
+                  .org_26       code   0x000064    program   0x000008
+                  .org_27       code   0x000068    program   0x000004
+                  .org_28       code   0x00006a    program   0x000008
+                  .org_29       code   0x00006e    program   0x000004
+                  .org_30       code   0x000070    program   0x000008
+                  .org_31       code   0x000074    program   0x000004
+                  .org_32       code   0x000076    program   0x000008
+                  .org_33       code   0x00007a    program   0x000004
+                  .org_34       code   0x00007c    program   0x000008
+                  .org_35       code   0x000080    program   0x00001a
+                  .org_36       code   0x00008d    program   0x000014
+                  .org_37       code   0x000097    program   0x00001a
+                  .org_38       code   0x0000a4    program   0x000014
+                  .org_39       code   0x0000ae    program   0x00003a
+                  .org_40       code   0x0000cb    program   0x00000c
+                  .org_42       code   0x0000d1    program   0x00000c
+                  .org_67       code   0x0000d7    program   0x000006
+                  .org_43       code   0x0000da    program   0x00000c
+                  .org_65       code   0x0000e0    program   0x000002
+                  .org_44       code   0x0000e1    program   0x000018
+                  .org_45       code   0x0000ed    program   0x000000
+                  .org_47       code   0x0000ed    program   0x000002
+                  .org_46       code   0x0000ee    program   0x000002
+                  .org_48       code   0x0000ef    program   0x000034
+                  .org_49       code   0x000109    program   0x000002
+                  .org_51       code   0x00010a    program   0x000002
+                  .org_50       code   0x00010b    program   0x000002
+                  .org_52       code   0x00010c    program   0x000036
+                  .org_53       code   0x000127    program   0x000002
+                  .org_55       code   0x000128    program   0x000002
+                  .org_54       code   0x000129    program   0x000002
+                  .org_56       code   0x00012a    program   0x000036
+                  .org_57       code   0x000145    program   0x000002
+                  .org_59       code   0x000146    program   0x000002
+                  .org_58       code   0x000147    program   0x000002
+                  .org_60       code   0x000148    program   0x000034
+                  .org_61       code   0x000162    program   0x000002
+                  .org_63       code   0x000163    program   0x000002
+                  .org_62       code   0x000164    program   0x000002
+                  .org_64       code   0x000165    program   0x000006
+                  .org_66       code   0x000168    program   0x000008
+                  .org_68       code   0x00016c    program   0x000002
+.config_8007_/HOME/DJ/MPLABXPROJECTS/WSSPLITT       code   0x008007    program   0x000002
+.config_8008_/HOME/DJ/MPLABXPROJECTS/WSSPLITT       code   0x008008    program   0x000002
+.config_8009_/HOME/DJ/MPLABXPROJECTS/WSSPLITT       code   0x008009    program   0x000002
+.config_800A_/HOME/DJ/MPLABXPROJECTS/WSSPLITT       code   0x00800a    program   0x000002
+.config_800B_/HOME/DJ/MPLABXPROJECTS/WSSPLITT       code   0x00800b    program   0x000002
+
+
+
+                              Program Memory Usage 
+                               Start         End      
+                           ---------   ---------      
+                            0x000000    0x00016c      
+                            0x008007    0x00800b      
+            370 out of 2058 program addresses used, program memory utilization is 17%
+
+
+
+                              Symbols - Sorted by Name
+                     Name    Address   Location    Storage File                     
+                ---------  ---------  ---------  --------- ---------                
+                 at_eof_0   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                 at_eof_1   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                 at_eof_2   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                 at_eof_3   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                 at_eof_4   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                 at_eof_5   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                 at_eof_6   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                 at_eof_7   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                      eof   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                fill_loop   0x0000b7    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+                   init_0   0x000000    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 1.ASM
+                   init_1   0x000009    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 2.ASM
+                   init_2   0x0000d1    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+                   init_3   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                    nop16   0x000004    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 1.ASM
+                    nop32   0x000003    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 1.ASM
+                     nop4   0x000008    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 1.ASM
+                     nop7   0x000006    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 1.ASM
+                     nop8   0x000005    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 1.ASM
+                play_loop   0x0000f0    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+            stack_alloc_0   0x0000db    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+           ws8_resendBGpx   0x00009a    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+           ws8_resendFGpx   0x000083    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+        ws8_sendBG_23bits   0x0000a7    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendBGbit_1   0x00007d    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendBGbit_2   0x000077    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendBGbit_3   0x000071    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendBGbit_4   0x00006b    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendBGbit_5   0x000065    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendBGbit_6   0x00005f    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendBGbit_7   0x000059    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendBGbit_8   0x000053    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+           ws8_sendBGbyte   0x000053    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+             ws8_sendBGpx   0x0000a1    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+        ws8_sendFG_23bits   0x000090    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendFGbit_1   0x00004d    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendFGbit_2   0x000047    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendFGbit_3   0x000041    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendFGbit_4   0x00003b    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendFGbit_5   0x000035    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendFGbit_6   0x00002f    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendFGbit_7   0x000029    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendFGbit_8   0x000023    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+           ws8_sendFGbyte   0x000023    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+             ws8_sendFGpx   0x00008a    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+                ws_fillbg   0x0000b1    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+                ws_player   0x0000e1    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+            yield_again_0   0x0000d7    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+             yield_from_0   0x0000d4    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+
+
+
+                              Symbols - Sorted by Address
+                     Name    Address   Location    Storage File                     
+                ---------  ---------  ---------  --------- ---------                
+                   init_0   0x000000    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 1.ASM
+                    nop32   0x000003    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 1.ASM
+                    nop16   0x000004    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 1.ASM
+                     nop8   0x000005    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 1.ASM
+                     nop7   0x000006    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 1.ASM
+                     nop4   0x000008    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 1.ASM
+                   init_1   0x000009    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 2.ASM
+           ws8_sendFGbyte   0x000023    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendFGbit_8   0x000023    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendFGbit_7   0x000029    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendFGbit_6   0x00002f    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendFGbit_5   0x000035    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendFGbit_4   0x00003b    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendFGbit_3   0x000041    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendFGbit_2   0x000047    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendFGbit_1   0x00004d    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendBGbit_8   0x000053    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+           ws8_sendBGbyte   0x000053    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendBGbit_7   0x000059    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendBGbit_6   0x00005f    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendBGbit_5   0x000065    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendBGbit_4   0x00006b    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendBGbit_3   0x000071    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendBGbit_2   0x000077    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+          ws8_sendBGbit_1   0x00007d    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+           ws8_resendFGpx   0x000083    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+             ws8_sendFGpx   0x00008a    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+        ws8_sendFG_23bits   0x000090    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+           ws8_resendBGpx   0x00009a    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+             ws8_sendBGpx   0x0000a1    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+        ws8_sendBG_23bits   0x0000a7    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+                ws_fillbg   0x0000b1    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+                fill_loop   0x0000b7    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+                   init_2   0x0000d1    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+             yield_from_0   0x0000d4    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+            yield_again_0   0x0000d7    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+            stack_alloc_0   0x0000db    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+                ws_player   0x0000e1    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+                play_loop   0x0000f0    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 4.ASM
+                   init_3   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                      eof   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                 at_eof_7   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                 at_eof_6   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                 at_eof_5   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                 at_eof_4   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                 at_eof_3   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                 at_eof_2   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                 at_eof_1   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+                 at_eof_0   0x000168    program     static /home/dj/MPLABXProjects/wssplitter.X/__FILE__ 6.ASM
+
+
