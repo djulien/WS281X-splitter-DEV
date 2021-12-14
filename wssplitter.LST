@@ -1,4 +1,4 @@
-MPASM 5.87  /HOME/DJ/MPLABXPROJECTS/WSSPLITT   12-13-2021  0:07:08         PAGE  1
+MPASM 5.87  /HOME/DJ/MPLABXPROJECTS/WSSPLITT   12-13-2021  20:23:54         PAGE  1
 
 
 LOC  OBJECT CODE     LINE SOURCE TEXT
@@ -40,9 +40,9 @@ LOC  OBJECT CODE     LINE SOURCE TEXT
                       00034 ;  - uart bootloader; ground segment 0 out to enable? auto-baud detect; verify
                       00035 ;  - custom pixel dup/skip, enforce max brightness limit?
                       00036 ;================================================================================
-Message[301]: MESSAGE: (hoist 0: generic pic/asm helpers @3904)
+Message[301]: MESSAGE: (hoist 0: generic pic/asm helpers @4864)
 Message[301]: MESSAGE: (TODO: fix this ^^^ vvv)
-Message[301]: MESSAGE: (end of hoist 0 @4428)
+Message[301]: MESSAGE: (end of hoist 0 @5393)
 Message[301]: MESSAGE: (no hoist, app config/defs @47)
                           M         exitm
                       00050 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -55,7 +55,7 @@ Message[301]: MESSAGE: (no hoist, app config/defs @47)
                       00057 #define WSBIT_FREQ  (800 KHz); //WS281X "high" speed
                       00058 #define WSLATCH  (50 -20 usec); //end-of-frame latch time; "cheat" by using shorter interval and use the
                              extra time for processing overhead
-MPASM 5.87  /HOME/DJ/MPLABXPROJECTS/WSSPLITT   12-13-2021  0:07:08         PAGE  2
+MPASM 5.87  /HOME/DJ/MPLABXPROJECTS/WSSPLITT   12-13-2021  20:23:54         PAGE  2
 WS281X-Splitter - WS281X segment splitter/breakout/debug for Microchip PIC
 
 LOC  OBJECT CODE     LINE SOURCE TEXT
@@ -108,7 +108,7 @@ Message[301]: MESSAGE: (hoist 2: cooperative multi-tasking ukernel @1860)
 0002   2809               M     goto init_1
 0009                      M     ORG ctx_addr_1
 0009                      M init_1:
-                      02896     iopin_init;
+                      03226     iopin_init;
                           M     mov8 ANSELA, LITERAL(0); ; //all digital; CAUTION: do this before pin I/O
                           M ;    EXPAND_PUSH FALSE
                           M ;    NOEXPAND  ;reduce clutter
@@ -154,11 +154,11 @@ Message[301]: MESSAGE: (hoist 2: cooperative multi-tasking ukernel @1860)
 0020   019B               M     clrf PMD5
 Message[301]: MESSAGE: ([TODO] use RSTOSC HFINT 1MHz? @2326)
 Message[301]: MESSAGE: ([TODO] boot loader + LVP? @2345)
-8007   178C           02967     __config _CONFIG1, MY_CONFIG1
-8008   2FFE           02968     __config _CONFIG2, MY_CONFIG2
-8009   3F9F           02969     __config _CONFIG3, MY_CONFIG3
-800A   1FFF           02970     __config _CONFIG4, MY_CONFIG4
-800B   3FFF           02971     __config _CONFIG5, MY_CONFIG5
+8007   178C           03297     __config _CONFIG1, MY_CONFIG1
+8008   2FFE           03298     __config _CONFIG2, MY_CONFIG2
+8009   3F9F           03299     __config _CONFIG3, MY_CONFIG3
+800A   1FFF           03300     __config _CONFIG4, MY_CONFIG4
+800B   3FFF           03301     __config _CONFIG5, MY_CONFIG5
 Message[301]: MESSAGE: (end of hoist 2 @2376)
 Message[301]: MESSAGE: (hoist 3: app helpers @1247)
 Message[301]: MESSAGE: ([INFO] uart 16-bit brg ((32 * 1000000) / (2400 * 1000) / 4 - 1)) = 2 @1373)
@@ -183,585 +183,2134 @@ Message[301]: MESSAGE: (hoist 4: HACK: 8-bit parallel wsplayer @89)
                       00104 
                       00105 ;send 1 WS data bit to each IO pin:
                       00106 ;bits are assumed to be in WREG
-                      00107 ;2/3/5 env @8 MIPS uses 30% CPU time (3 instr), leaves 70% for caller (7 instr)
-                      00108 ;    doing_init TRUE
-                      00109 ;not needed: IO pin init does this
-                      00110 ;    mov8 LATA, LITERAL(0); //start with WS data lines low; NOTE: this is required for correct send startup
-                      00111 ;    doing_init FALSE
-                      00112 ;ws8_sendbit_wreg macro glue_reserved
-                      00113 ;    ws8_sendbit ORG$, ORG$, NOP #v(4 - ABS(glue_reserved))
-                      00114 ;    endm
-                      00115 ws8_sendbit macro idler1, idler2, idler4
-                      00116     ERRIF((WS_ENV != 235) || (FOSC_FREQ != 8 MIPS), [ERROR] WS envelope WS_ENV !implemented @ fosc FOSC_FREQ - use 235 @8MIPS @116)
-                      00117     COMF LATA, F; //bit start; CAUTION: LATA must be 0 prior (which it should be)
-                      00118 ;    ORG $+1; placeholder
-                      00119     LOCAL here1 = $
-                      00120     idler1
-                      00121     nopif $ == here1, 1
-                      00122     MOVWF LATA; //bit data
-                      00123 ;    ORG $+2; placeholder
-                      00124     LOCAL here2 = $
-                      00125     idler2
-                      00126     nopif $ == here2, 2
-                      00127     CLRF LATA; //bit end
-                      00128 ;    ORG $+4; placeholder
-                      00129     LOCAL here3 = $
-                      00130     idler4
-                      00131     nopif $ == here3, 4
-                      00132     endm
-                      00133 
-                      00134 
-                      00135 ;//send var bit, byte, or pixel:
-                      00136 ;//FSR0 or 1 points to parallel pixel data
-                      00137 ;//by convention, FSR0 is bg color, FSR1 is fg color
-                      00138 ;//NOTE: FSR changes after each call (auto-inc)
-  0000                00139     CONSTANT BG = 0, FG = 1
-                      00140     BANKCHK LATA; caller must set BSR; makes timing uniform in here
-0022   0140               M     banksel LATA
-0023                  00141 ws8_sendFGbyte:
-                      00142 ws8_sendFGbit_8:     ws8_sendbit MOVIW INDF1++, ORG$, ORG$;;
-0025   0098               M     movwf LATA
-0026   2827               M     goto $+1
-0027   0198               M     clrf LATA
-0028   2008               M     call nop4
-                      00143 ws8_sendFGbit_7:     ws8_sendbit MOVIW INDF1++, ORG$, ORG$;;
-002B   0098               M     movwf LATA
-002C   282D               M     goto $+1
-002D   0198               M     clrf LATA
-002E   2008               M     call nop4
-                      00144 ws8_sendFGbit_6:     ws8_sendbit MOVIW INDF1++, ORG$, ORG$;;
-0031   0098               M     movwf LATA
-0032   2833               M     goto $+1
-0033   0198               M     clrf LATA
-0034   2008               M     call nop4
-                      00145 ws8_sendFGbit_5:     ws8_sendbit MOVIW INDF1++, ORG$, ORG$;;
-0037   0098               M     movwf LATA
-0038   2839               M     goto $+1
-0039   0198               M     clrf LATA
-003A   2008               M     call nop4
-                      00146 ws8_sendFGbit_4:     ws8_sendbit MOVIW INDF1++, ORG$, ORG$;;
-003D   0098               M     movwf LATA
-003E   283F               M     goto $+1
-003F   0198               M     clrf LATA
-0040   2008               M     call nop4
-                      00147 ws8_sendFGbit_3:     ws8_sendbit MOVIW INDF1++, ORG$, ORG$;;
-0043   0098               M     movwf LATA
-0044   2845               M     goto $+1
-0045   0198               M     clrf LATA
-0046   2008               M     call nop4
-                      00148 ws8_sendFGbit_2:     ws8_sendbit MOVIW INDF1++, ORG$, ORG$;;
-0049   0098               M     movwf LATA
-004A   284B               M     goto $+1
-004B   0198               M     clrf LATA
-004C   2008               M     call nop4
-                      00149 ws8_sendFGbit_1:     ws8_sendbit MOVIW INDF1++, ORG$, return; //return + next call takes 4 instr
-004F   0098               M     movwf LATA
-0050   2851               M     goto $+1
-0051   0198               M     clrf LATA
-0053                  00150 ws8_sendBGbyte:
-                      00151 ws8_sendBGbit_8:     ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
-0055   0098               M     movwf LATA
-0056   2857               M     goto $+1
-0057   0198               M     clrf LATA
-0058   2008               M     call nop4
-                      00152 ws8_sendBGbit_7:     ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
-005B   0098               M     movwf LATA
-005C   285D               M     goto $+1
-005D   0198               M     clrf LATA
-005E   2008               M     call nop4
-                      00153 ws8_sendBGbit_6:     ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
-0061   0098               M     movwf LATA
-0062   2863               M     goto $+1
-0063   0198               M     clrf LATA
-0064   2008               M     call nop4
-                      00154 ws8_sendBGbit_5:     ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
-0067   0098               M     movwf LATA
-0068   2869               M     goto $+1
-0069   0198               M     clrf LATA
-006A   2008               M     call nop4
-                      00155 ws8_sendBGbit_4:     ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
-006D   0098               M     movwf LATA
-006E   286F               M     goto $+1
-006F   0198               M     clrf LATA
-0070   2008               M     call nop4
-                      00156 ws8_sendBGbit_3:     ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
-0073   0098               M     movwf LATA
-0074   2875               M     goto $+1
-0075   0198               M     clrf LATA
-0076   2008               M     call nop4
-                      00157 ws8_sendBGbit_2:     ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
-0079   0098               M     movwf LATA
-007A   287B               M     goto $+1
-007B   0198               M     clrf LATA
-007C   2008               M     call nop4
-                      00158 ws8_sendBGbit_1:     ws8_sendbit MOVIW INDF0++, ORG$, return; //return + next call takes 4 instr
-007F   0098               M     movwf LATA
-0080   2881               M     goto $+1
-0081   0198               M     clrf LATA
-                      00159 ;lamba wrapper for ws_sendbit:
-                      00160 ;uses NOP 2 timeslot
-                      00161 rewindpx macro fgbg
-                      00162     addfsr FSR#v(fgbg), -24+1; first bit was already sent, only need 23 more
-                      00163     NOP 1
-                      00164     endm
-0083                  00165 ws8_resendFGpx:
-                      00166     ws8_sendbit MOVIW -24[FSR1],      rewindpx FG, goto ws8_sendFG_23bits; //goto+call = 4 instr
-0085   0098               M     movwf LATA
-0087   0000               M     nop
-0088   0198               M     clrf LATA
-008A                  00167 ws8_sendFGpx:
-                      00168     ws8_sendbit MOVIW INDF1++,      ORG$, NOP 2; //reserve 2 instr for next call
-008C   0098               M     movwf LATA
-008D   288E               M     goto $+1
-008E   0198               M     clrf LATA
-008F   2890               M     goto $+1
-0090                  00169 ws8_sendFG_23bits:
-0090   2029           00170     call ws8_sendFGbit_7; //custom bit above
-0091   2023           00171     call ws8_sendFGbit_8;
-0092   2029           00172     call ws8_sendFGbit_7; //custom bit below
-                      00173     NOP 2; //replaces "call" (next bit is inlined)
-0093   2894               M     goto $+1
-                      00174     ws8_sendbit MOVIW INDF1++,      ORG$, return; //return + next call takes 4 instr
-0096   0098               M     movwf LATA
-0097   2898               M     goto $+1
-0098   0198               M     clrf LATA
-009A                  00175 ws8_resendBGpx:
-                      00176     ws8_sendbit MOVIW -24[FSR0],      rewindpx BG, goto ws8_sendBG_23bits; //goto+call = 4 instr
-009C   0098               M     movwf LATA
-009E   0000               M     nop
-009F   0198               M     clrf LATA
-00A1                  00177 ws8_sendBGpx:
-                      00178     ws8_sendbit MOVIW INDF0++,      ORG$, NOP 2; //reserve 2 instr for next call
-00A3   0098               M     movwf LATA
-00A4   28A5               M     goto $+1
-00A5   0198               M     clrf LATA
-00A6   28A7               M     goto $+1
-00A7                  00179 ws8_sendBG_23bits:
-00A7   2059           00180     call ws8_sendBGbit_7; //custom bit above
-00A8   2053           00181     call ws8_sendBGbit_8;
-00A9   2059           00182     call ws8_sendBGbit_7; //custom bit below
-                      00183     NOP 2; //replaces "call" (next bit is inlined)
-00AA   28AB               M     goto $+1
-                      00184     ws8_sendbit MOVIW INDF0++,      ORG$, return; //return + next call takes 4 instr
-00AD   0098               M     movwf LATA
-00AE   28AF               M     goto $+1
-00AF   0198               M     clrf LATA
-                      00185 
-                      00186 
-                      00187     nbDCL count,;;
+                      00107 ;2/3/5 is the ideal instr env @8 MIPS- conforms strictly to WS2811 *and* WS2812 timing specs
+                      00108 ;2/3/5 env uses 30% CPU time (3 instr), leaves 70% for caller (7 instr)
+                      00109 ;chainable- last 4 instr of env time (idle) are typically used for call/return, loop control, or other glue logic
+                      00110 ;earlier 1-3 instr of idle env time are typically used for data prep
+                      00111 ;heavy rendering typically must be done between outside WS env (while waiting on timer for next frame) - there's not enough time during WS env except for the most trivial r
+                      00112 ;    doing_init TRUE
+                      00113 ;not needed: IO pin init does this
+                      00114 ;    mov8 LATA, LITERAL(0); //start with WS data lines low; NOTE: this is required for correct send startup
+                      00115 ;    doing_init FALSE
+                      00116 ;ws8_sendbit_wreg macro glue_reserved
+                      00117 ;    ws8_sendbit ORG$, ORG$, NOP #v(4 - ABS(glue_reserved))
+                      00118 ;    endm
+                      00119 ws8_sendbit macro idler1, idler2, idler4
+                      00120     ERRIF((WS_ENV != 235) || (FOSC_FREQ != 8 MIPS), [ERROR] WS envelope WS_ENV !implemented @ fosc FOSC_FREQ - use 235 @8MIPS @120)
+                      00121     COMF LATA, F; //bit start; CAUTION: LATA must be 0 prior (which it should be)
+                      00122 ;    ORG $+1; placeholder
+                      00123     LOCAL here1 = $
+                      00124     idler1
+                      00125     nopif $ == here1, 1
+                      00126     MOVWF LATA; //bit data
+                      00127 ;    ORG $+2; placeholder
+                      00128     LOCAL here2 = $
+                      00129     idler2
+                      00130     nopif $ == here2, 2
+                      00131     CLRF LATA; //bit end
+                      00132 ;    ORG $+4; placeholder
+                      00133     LOCAL here3 = $
+                      00134     idler4
+                      00135     nopif $ == here3, 4
+                      00136     endm
+                      00137 
+                      00138 ;wrappers for use with ws_sendbit:
+                      00139 ;use with NOP 2 timeslot
+                      00140 rewindpx macro fsr
+                      00141     addfsr fsr, -24+1; first bit was already sent, only need 23 more
+                      00142 ;    NOP 1
+                      00143     setbit BITVARS, log2(HAS_WSDATA), FALSE; will be eof @loop exit; set it now during idle time
+                      00144     endm
+                      00145 upd_count_low macro
+                      00146     DECFSZ REGLO(pxcount), F; //REGLO(count), F; //WREG, F
+                      00147     INCF REGHI(pxcount), F; kludge: cancels out DECF upper count byte
+                      00148     endm
+                      00149 #define get_rgbbyte(rgb24, byteinx)  get_rgbbyte_#v(byteinx) rgb24
+  0000                00150     VARIABLE GETRGBBYTE_INSTR; 2 or 4 instr; tell caller
+                      00151 get_rgbbyte(macro, 0) rgbval
+                      00152     LOCAL here = $
+                      00153     mov8 BYTEOF(rgb_next, 0), BYTEOF(rgbval, 0);
+                      00154     BANKCHK LATA
+                      00155 GETRGBBYTE_INSTR = $ - here
+                      00156 ;    NOP #v(here + 4 - $); rgbval might require banksel
+                      00157     endm
+                      00158 get_rgbbyte(macro, 1) rgbval
+                      00159     LOCAL here = $
+                      00160     mov8 BYTEOF(rgb_next, 1), BYTEOF(rgbval, 1);
+                      00161     BANKCHK LATA
+                      00162 GETRGBBYTE_INSTR = $ - here
+                      00163     endm
+                      00164 get_rgbbyte(macro, 2) rgbval
+                      00165     LOCAL here = $
+                      00166     mov8 BYTEOF(rgb_next, 2), BYTEOF(rgbval, 2);
+                      00167     BANKCHK LATA
+                      00168 GETRGBBYTE_INSTR = $ - here
+                      00169     endm
+                      00170 ;generic prep pairs of bits:
+                      00171 prep_start macro bitnum
+                      00172     CLRF pxbuf0 + 23 - (bitnum + 1);
+                      00173     CLRF pxbuf0 + 23 - bitnum;
+                      00174     endm
+                      00175 prep_finish macro bitnum
+                      00176     ifbit rgb_next + 2 - (bitnum + 1) / 8, (bitnum + 1) % 8, TRUE, dest_arg(F) DECF pxbuf0 + 23 - (bitnum + 1); big endian
+                      00177     ifbit rgb_next + 2 - bitnum / 8, bitnum % 8, TRUE, dest_arg(F) DECF pxbuf0 + 23 - bitnum; big endian
+                      00178     endm
+                      00179 
+                      00180 
+                      00181     nbDCL BITVARS,; ; //general-use bit vars
                           M     CBLOCK NEXT_RAM9999; BOOL2INT(banked))  ;continue where we left off last time
-  00000070                M         count 
+  00000070                M         BITVARS 
                           M     ENDC  ;can't span macros
-  0007                00188     constant UNIV_SCALE = divup(UNIV_LEN, 256); ; //8; //octal nodes to scale UNIV_LEN down to 8 bits
-  00E5                00189     constant SEND_COUNT = divup(UNIV_LEN, UNIV_SCALE);;
-                      00190 ;    messg [INFO] univ len #v(UNIV_LEN), sends #v(SEND_COUNT * UNIV_SCALE) nodes with granularity #v(UNIV_SCALE) nodes @190
-Message[301]: MESSAGE: ([WARNING] univ len 1600 rounds to 1603 during send  @191)
-                      00191     WARNIF(SEND_COUNT * UNIV_SCALE != UNIV_LEN, [WARNING] univ len 1600         rounds to 1603                        during send  @191)
-                      00192 ;TODO: fix ^^^ by adding 1x send after loop
-                      00193 ws_fillbg: DROP_CONTEXT;
-                      00194     mov8 count, LITERAL(SEND_COUNT); ; //divup(UNIV_LEN / UNIV_SCALE)); //scale to fit in 8-bit counter
-00B1   30E5               M     movlw (((ASM_MSB | (SEND_COUNT))) & ~ASM_MSB)
-00B2   00F0               M     movwf count
-                      00195 ;    addfsr FSR#v(BG), 24; //compensate for first rewind
-                      00196     mov16 FSR0,      LITERAL(bgcolor + 24); ; //point to END of palette entry (compensate for resend)
-00B3   3050               M     movlw (((ASM_MSB | (_1581SRC & 0xFF))) & ~ASM_MSB)
-00B4   0084               M     movwf FSR0
-00B5   0185               M     clrf FSR00hi
-                      00197     BANKCHK LATA; //pre-select BSR to simplify timing
-00B6   0140               M     banksel LATA
-00B7                  00198 fill_loop: ;CAUTION: do not yield within this loop - will interfere with timing
-                      00199     if UNIV_SCALE > 0
-                      00200         REPEAT LITERAL(UNIV_SCALE - 1), call ws8_resendBGpx
-  00000006                M _1628COUNT = (((ASM_MSB | (UNIV_SCALE - 1))) & ~ASM_MSB)
-00B7   209A               M     call ws8_resendBGpx
-00B8   209A               M     call ws8_resendBGpx
-00B9   209A               M     call ws8_resendBGpx
-00BA   209A               M     call ws8_resendBGpx
-00BB   209A               M     call ws8_resendBGpx
-00BC   209A               M     call ws8_resendBGpx
-                      00201         NOP 2; //replaces "call" (next bit is inlined)
+                      00182     doing_init TRUE;
+0021                      M     ORG ctx_addr_2
+0021                      M init_2:
+                      00183     mov8 BITVARS, LITERAL(0);;
+0021   01F0               M     clrf BITVARS
+                          M             exitm
+                      00184     doing_init FALSE;
+                      00185 ;#define IS_SENDING  0x80
+                      00186 ;#define SEND_PARITY  0x40
+  0080                00187     CONSTANT HAS_WSDATA = 0x80;
+                      00188 
+                      00189 
+                      00190 ;//send 24 WS data bits (1 WS pixel) to each IO pin:
+                      00191 ;count is #pixels to send: >0 unique values, <0 repeating values
+                      00192 ;"double buffered" using FSR0/FSR2 -next pixel is prepped while sending current pixel
+                      00193 ;chainable
+                      00194     b0DCL16 pxcount; can be banked (if same bank as LATA) or non-banked to avoid extra banksel
+                          M     CBLOCK NEXT_RAM0; BOOL2INT(banked))  ;continue where we left off last time
+  00000020                M         pxcount :2
+                          M     ENDC  ;can't span macros
+  0021                    M     CONSTANT pxcount0hi = pxcount + 1
+                      00195 ;put in bank0 so BSR will match LATA:
+                      00196     b0DCL pxbuf0, :24; //8 parallel 24-bit values (1 for each IO pin)
+                          M     CBLOCK NEXT_RAM0; BOOL2INT(banked))  ;continue where we left off last time
+  00000022                M         pxbuf0 :24
+                          M     ENDC  ;can't span macros
+                      00197     b0DCL24 rgb_next; //hold next rgb val for prep while sending current ws data (to avoid extra banksel and allow generic code)
+                          M     CBLOCK NEXT_RAM0; BOOL2INT(banked))  ;continue where we left off last time
+  0000003A                M         rgb_next :3
+                          M     ENDC  ;can't span macros
+  003B                    M     CONSTANT rgb_next0mid = rgb_next + 1
+  003C                    M     CONSTANT rgb_next0hi = rgb_next + 2
+                      00198 ;#define bufnum(pxbuf)  (((pxbuf) - pxbuf0) / 24)
+                      00199 ;add as many as dsired (>= 2 needed for double-buffering):
+                      00200 ;    b0DCL pxbuf1, :24; //8 parallel 24-bit values (1 for each IO pin)
+                      00201 ;    b0DCL pxbuf2, :24; //8 parallel 24-bit values (1 for each IO pin)
+                      00202 ;    b0DCL PXBUFE, :0; end of pxbufs
+                      00203 ;    CONSTANT NUM_PXBUFS = bufnum(PXBUFE);
+                      00204 ;#define pxbuf(i)  ((i) % NUM_PXBUFS)
+                      00205 ;#define PREP_NONE  no_prep, 0; , ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$, ORG$
+                      00206 ;#define PREP_RGB(rgb)  prep_rgb_bits, rgb; PREP_BIT(rgb, 23), PREP_BIT(rgb, 23), PREP_BIT(rgb, 23), PREP_BIT(rgb, 23), PREP_BIT(rgb, 23), PREP_BIT(rgb, 23), PREP_BIT(rgb, 
+                      00207 ;#define PREP_BIT(rgb, bit)  rgbbit_#v(bit)(rgb)
+                      00208 ;    VARIABLE sendpx_init = FALSE;
+                      00209 ;    CONSTANT UNIV_SCALE = divup(UNIV_LEN, 256); //8; //octal nodes to scale UNIV_LEN down to 8 bits
+                      00210 ;#define ws8_preppx  ws_handlepx FALSE,
+                      00211 ;#define ws8_sendpx  ws_handlepx TRUE,
+                      00212 ;ws8_px macro want_send, pxbuf, nextpx, count; 0, prep1, prep2, prep3, prep4, prep5, prep6, prep7, prep8, prep9, prep10, prep11, prep12, prep13, prep14, prep15, prep16, pre
+                      00213     ERRIF(NEEDS_BANKSEL(pxbuf0, LATA), [ERROR] pxbuf0 is in bank 0                  but LATA is in 0                (needs to be same or unbanked) @213)
+                      00214     ERRIF(NEEDS_BANKSEL(rgb_next, LATA), [ERROR] rgb_next is in bank 0                    but LATA is in 0                (needs to be same or unbanked) @214)
+                      00215     ERRIF(NEEDS_BANKSEL(pxcount, LATA), [ERROR] pxcount is in bank 0                   but LATA is in 0                (needs to be same or unbanked) @215)
+                      00216 #define FSR_prep  FSR1; don't disturb send ptr
+                      00217 #define FSR_send  FSR0
+                      00218 #define INDF_send  INDF0
+  0000                00219     VARIABLE NUM_SENDPX = 0;
+                      00220 ws8_sendpx macro rgb24, count; 0, prep1, prep2, prep3, prep4, prep5, prep6, prep7, prep8, prep9, prep10, prep11, prep12, prep13, prep14, prep15, prep16, prep17, prep18, pre
+                      00221 NUM_SENDPX += 1; kludge: need unique value to help out mpasm :(
+                      00222     LOCAL want_prep = (rgb24 != 0); all lit and reg exc INDF are !0, and INDF can't be used because FSR is used
+                      00223 ;    LOCAL bufinx = IIF(pxbuf < pxbuf0, pxbuf, bufnum(pxbuf)); //allow inx or addr
+                      00224 ;    LOCAL pxprep = pxbuf#v(bufinx % NUM_PXBUFS), pxsend = pxbuf#v((bufinx +NUM_PXBUFS - 1) % NUM_PXBUFS); circular fifo (wrap)
+                      00225 ;#define FSR_prep  FSR#v(bufinx & 1)
+                      00226 ;#define FSR_send  FSR#v(!(bufinx & 1)1; //reg addr
+                      00227 ;#define INDF_prep  INDF#v(bufinx & 1)
+                      00228 ;#define INDF_send  INDF#v(!(bufinx & 1)1; //reg addr
+                      00229 ;    LOCAL sendwhich = BOOL2INT(FSR_send == FSR1);
+                      00230 ;    if count == LITERAL(0); prep only (before first px sent)
+                      00231 ;       while bitnum
+                      00232 ;           nextpx_prep pxprep, prep_arg, bitnum
+                      00233 ;bitnum -= 1;
+                      00234 ;        endw
+                      00235 ;       exitm
+                      00236 ;    endif
+                      00237 ;    if !sendpx_init
+                      00238 ;        nbDCL pxcount,;
+                      00239 ;        constant UNIV_SCALE = divup(UNIV_LEN, 256); //8; //octal nodes to scale UNIV_LEN down to 8 bits
+                      00240 ;       constant SEND_COUNT = divup(UNIV_LEN, UNIV_SCALE);
+                      00241 ;;    messg [INFO] univ len #v(UNIV_LEN), sends #v(SEND_COUNT * UNIV_SCALE) nodes with granularity #v(UNIV_SCALE) nodes @241
+                      00242 ;       WARNIF(SEND_COUNT * UNIV_SCALE != UNIV_LEN, [WARNING/TODO] univ len #v(UNIV_LEN) rounds to #v(SEND_COUNT * UNIV_SCALE) during send  @242)
+                      00243 ;;TODO: fix ^^^ by adding 1x send after loop
+                      00244 ;sendpx_init = TRUE;
+                      00245 ;    endif
+                      00246 ;    local want_prep = 1; TODO
+                      00247 ;    ERRIF(!ISLIT(count), [TODO] var count @247)
+                      00248 ;NOTE: reg count 0 => UNIV_LEN (no time avail to check != 0 < send)
+                      00249 ;    ERRIF(want_send && (NUM_PXBUFS < 2), [ERROR] need >= 2 px bufs for double buffering: #v(NUM_PXBUFS) @249);
+                      00250 ;    LOCAL bufinx = (buf_parity == FSR0, color0, color1); //addr !data
+                      00251 ;    LOCAL prepbuf = sendbuf ^ color0 ^ color; //addr !data
+                      00252 ;   mov8 pxcount, count; LITERAL(SEND_COUNT); //divup(UNIV_LEN / UNIV_SCALE)); //scale to fit in 8-bit counter
+                      00253 ;    addfsr FSR#v(BG), 24; //compensate for first rewind
+                      00254 ;    mov16 FSR_send, LITERAL(pxsend + 24); //point to END of palette entry (compensate for resend)
+                      00255 ;    BANKCHK LATA; //pre-select BSR to simplify timing
+                      00256 ;already prepped (for chaining): BSR on LATA, pxcount and FSR_send
+                      00257     LOCAL sendpx_loop, prep_only, noprep
+                      00258 ;    CONTEXT_SAVE help_mpasm#v(NUM_SENDPX);
+                      00259     ifbit BITVARS, log2(HAS_WSDATA), FALSE, GOTO prep_only; _#v(NUM_SENDPX); CAUTION: true case (fall-thru) must be == 2 instr
+                      00260 ;    ORG+2
+                      00261 ;"ifbit" above used up 2 leader instr, none left for "call"; need to inline-send first bit:
+                      00262 sendpx_loop: ;CAUTION: do not yield within this loop - will interfere with timing
+                      00263     if want_prep && (rgb24 != rgb_next); full data prep takes 73 instr; xfr to dedicated addr to allow generic code to prep during send
+                      00264 ;       ERRIF(!ISLIT(rgb24) && ISBANKED(rgb24) && (BANKOF(rgb24) != BANKOF(LATA)), [ERROR] rgb24 must be !banked or in LATA bank #v(BANKOF(LATA)) @264)
+                      00265         ws8_sendbit MOVIW -24[FSR_send], rewindpx FSR_send, get_rgbbyte(rgb24, 0); call ws8_send#v(24-2)bits_using#v(FSR_send);
+                      00266 ;inline a few bits while setting up data prep:
+                      00267 ;       if ISLIT(rgb24) || !NEEDS_BANKSEL(rgb24, LATA))
+                      00268         if GETRGBBYTE_INSTR == 2; fits into fewer timeslots
+                      00269             get_rgbbyte(rgb24, 1); pad out remainder of previous bit time
+                      00270             ws8_sendbit MOVIW INDF_send++, get_rgbbyte(rgb24, 2), NOP 2
+                      00271             call ws8_send#v(24-3)bits_using#v(FSR_send);
+                      00272         else; takes more timeslots
+                      00273             ws8_sendbit MOVIW INDF_send++, ORG$, get_rgbbyte(rgb24, 1);
+                      00274             ws8_sendbit MOVIW INDF_send++, ORG$, get_rgbbyte(rgb24, 2);
+                      00275             ws8_sendbit MOVIW INDF_send++, ORG$, NOP 2
+                      00276             call ws8_send#v(24-5)bits_using#v(FSR_send);
+                      00277         endif
+                      00278 ;       setbit BITVARS, log2(WSDATA_WAITING), FALSE; eof
+                      00279     else; just send, no prep
+                      00280         ws8_sendbit MOVIW -24[FSR_send], rewindpx FSR_send, NOP 2
+                      00281         call ws8_send#v(24-2)bits_using#v(FSR_send);
+                      00282 ;    call ws8_send#v(8)bits_using#v(FSR_send);
+                      00283 ;    call ws8_send#v(8-1)bits_using#v(FSR_send);
+                      00284     endif
+                      00285     NOP 2; //replaces "call" (next bit is inlined)
+                      00286 ;//call+call = 4 instr
+                      00287 ;    if UNIV_SCALE > 1
+                      00288 ;        REPEAT LITERAL(UNIV_SCALE - 1), call ws8_resendpx_using#v(FSR_send);
+                      00289 ;       NOP 2; //replaces "call" (next bit is inlined)
+                      00290 ;    endif
+                      00291 ;sendrewindpx with custom last bit:
+                      00292 ;    ws8_sendbit MOVIW -24[FSR_send], rewindpx BG, call ws8_sendBGbit_#v(8-1); //call+call = 4 instr
+                      00293 ;    call ws8_sendBGbit_#v(8);
+                      00294 ;    call ws8_sendBGbit_#v(8-1); //custom bit below
+                      00295     ws8_sendbit MOVIW INDF_send++, upd_count_low, NOP 1; //reserve 3 instr for loop ctl
+                      00296     DECFSZ REGHI(pxcount), F; //NOTE: upd_count_low cancels this out if low !wrap
+                      00297     goto sendpx_loop
+                      00298     GOTO noprep; prep was already done during send above
+                      00299 prep_only: DROP_CONTEXT;
+                      00300 ;#undefine FSR_prep
+                      00301 ;#undefine FSR_send
+                      00302 ;#undefine INDF_prep
+                      00303 ;#undefine INDF_send
+                      00304 ;    LOCAL noprep
+                      00305     LOCAL bitnum = 23
+                      00306     if want_prep && (count != LITERAL(0)); prep only, no send
+                      00307         mov16 pxcount, count;
+                      00308         if !ISLIT(count)
+                      00309             mov8 WREG, BYTEOF(count, 0); WREG might already contain this (if count is < 256 in mov16 above), so do it first
+                      00310             IORWF BYTEOF(count, 1), W;
+                      00311             ifbit EQUALS0 TRUE, GOTO noprep
+                      00312         endif
+                      00313 ;       if !ISLIT(rgb24)
+                      00314 ;           memset(pxbuf0, LITERAL(0), LITERAL(24));
+                      00315 ;    nbDCL memlen,;
+                      00316 ;memset macro dest, val, len
+                      00317 ;    if val != WREG
+                      00318 ;       mov8 memlen, len;
+                      00319 ;        mov16(FSR1, LITERAL(dest));
+                      00320 ;       mov8 WREG, val
+                      00321 ;memset_loop:
+                      00322 ;       MOVIW INDF1++
+                      00323 ;       DECFSZ memlen, F
+                      00324 ;       GOTO memset_loop
+                      00325 ;    else
+                      00326 ;       mov8 dest, val; kludge: use dest as temp (since it will get that value anyway)
+                      00327 ;        mov16(FSR1, LITERAL(dest));
+                      00328 ;       else
+                      00329 ;       endif
+                      00330 ;    endif
+                      00331         while bitnum && (rgb24 != pxbuf0); NOTE: caller can custom-prep directly into pxbuf0 if desired
+                      00332             if ISLIT(rgb24)
+                      00333                 mov8 pxbuf0 + 23 - bitnum, LITERAL(BOOL2INT((rgb24) & BIT(bitnum)) * 0xFF)
+                      00334             else
+                      00335                 CLRF pxbuf0 + 23 - bitnum;
+                      00336                 ifbit rgb24 + 2 - bitnum / 8, bitnum % 8, TRUE, dest_arg(F) DECF pxbuf0 + 23 - bitnum; big endian
+                      00337             endif
+                      00338 bitnum -= 1
+                      00339         endw
+                      00340         mov16 FSR_send, LITERAL(pxbuf0 + 24); NOTE: points to end of pxbuf so rewind will work
+                      00341         setbit BITVARS, log2(HAS_WSDATA), TRUE; mark ready to send, but don't send until caller gives next rgb value (to prep *during* send)
+                      00342         BANKCHK LATA
+                      00343     endif
+                      00344 noprep:
+                      00345     endm
+                      00346 
+                      00347 ;//send multiple bits:
+                      00348 ;//FSR0 or 1 points to parallel pixel data
+                      00349 ;//NOTE: FSR changes after each call (auto-inc); caller is responsible for rewind
+                      00350 ;this is a callable function to reduce code space
+                      00351 ;only generic bit send is done here; custom logic must be inlined in caller
+                      00352     BANKCHK LATA; caller must set BSR; makes timing uniform in here
+0023   0140               M     banksel LATA
+                      00353 ws8_send24bits_using4:                ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
+0026   0098               M     movwf LATA
+0027   2828               M     goto $+1
+0028   0198               M     clrf LATA
+0029   2008               M     call nop4
+                      00354 ws8_send23bits_using4:                ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
+002C   0098               M     movwf LATA
+002D   282E               M     goto $+1
+002E   0198               M     clrf LATA
+002F   2008               M     call nop4
+                      00355 ws8_send22bits_using4:                ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
+0032   0098               M     movwf LATA
+0033   2834               M     goto $+1
+0034   0198               M     clrf LATA
+0035   2008               M     call nop4
+                      00356 ws8_send21bits_using4:                ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
+0038   0098               M     movwf LATA
+0039   283A               M     goto $+1
+003A   0198               M     clrf LATA
+003B   2008               M     call nop4
+                      00357 ws8_send20bits_using4:                ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
+003E   0098               M     movwf LATA
+003F   2840               M     goto $+1
+0040   0198               M     clrf LATA
+0041   2008               M     call nop4
+                      00358 ;safe to do generic prep after this point (all conditional branches come in somewhere above)
+                      00359 ws8_send19bits_using4:                ws8_sendbit MOVIW INDF0++, prep_start 22, prep_finish 22;
+0044   0098               M     movwf LATA
+0045   01A2               M     clrf pxbuf0 + 23 - (22 + 1)
+0046   01A3               M     clrf pxbuf0 + 23 - 22
+0047   0198               M     clrf LATA
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - (22 + 1)
+                          M     decf_banksafe pxbuf0 + 23 - (22 + 1), F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - (22 + 1)
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - (22 + 1);, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - (22 + 1)
+                          M     withdest_1 decf pxbuf0 + 23 - (22 + 1)
+0049   03A2               M     decf pxbuf0 + 23 - (22 + 1), F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - (22 + 1) == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+0048                      M     ORG ctx_addr_4
+004A                      M     ORG ctx_addr_5
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - 22
+                          M     decf_banksafe pxbuf0 + 23 - 22, F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - 22
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - 22;, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - 22
+                          M     withdest_1 decf pxbuf0 + 23 - 22
+004B   03A3               M     decf pxbuf0 + 23 - 22, F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - 22 == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+004A                      M     ORG ctx_addr_6
+004C                      M     ORG ctx_addr_7
+                      00360 ws8_send18bits_using4:                ws8_sendbit MOVIW INDF0++, prep_start 20, prep_finish 20;
+004E   0098               M     movwf LATA
+004F   01A4               M     clrf pxbuf0 + 23 - (20 + 1)
+0050   01A5               M     clrf pxbuf0 + 23 - 20
+0051   0198               M     clrf LATA
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - (20 + 1)
+                          M     decf_banksafe pxbuf0 + 23 - (20 + 1), F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - (20 + 1)
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - (20 + 1);, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - (20 + 1)
+                          M     withdest_1 decf pxbuf0 + 23 - (20 + 1)
+0053   03A4               M     decf pxbuf0 + 23 - (20 + 1), F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - (20 + 1) == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+0052                      M     ORG ctx_addr_8
+0054                      M     ORG ctx_addr_9
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - 20
+                          M     decf_banksafe pxbuf0 + 23 - 20, F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - 20
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - 20;, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - 20
+                          M     withdest_1 decf pxbuf0 + 23 - 20
+0055   03A5               M     decf pxbuf0 + 23 - 20, F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - 20 == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+0054                      M     ORG ctx_addr_10
+0056                      M     ORG ctx_addr_11
+                      00361 ws8_send17bits_using4:                ws8_sendbit MOVIW INDF0++, prep_start 18, prep_finish 18;
+0058   0098               M     movwf LATA
+0059   01A6               M     clrf pxbuf0 + 23 - (18 + 1)
+005A   01A7               M     clrf pxbuf0 + 23 - 18
+005B   0198               M     clrf LATA
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - (18 + 1)
+                          M     decf_banksafe pxbuf0 + 23 - (18 + 1), F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - (18 + 1)
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - (18 + 1);, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - (18 + 1)
+                          M     withdest_1 decf pxbuf0 + 23 - (18 + 1)
+005D   03A6               M     decf pxbuf0 + 23 - (18 + 1), F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - (18 + 1) == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+005C                      M     ORG ctx_addr_12
+005E                      M     ORG ctx_addr_13
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - 18
+                          M     decf_banksafe pxbuf0 + 23 - 18, F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - 18
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - 18;, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - 18
+                          M     withdest_1 decf pxbuf0 + 23 - 18
+005F   03A7               M     decf pxbuf0 + 23 - 18, F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - 18 == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+005E                      M     ORG ctx_addr_14
+0060                      M     ORG ctx_addr_15
+                      00362 ws8_send16bits_using4:                ws8_sendbit MOVIW INDF0++, prep_start 16, prep_finish 16;
+0062   0098               M     movwf LATA
+0063   01A8               M     clrf pxbuf0 + 23 - (16 + 1)
+0064   01A9               M     clrf pxbuf0 + 23 - 16
+0065   0198               M     clrf LATA
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - (16 + 1)
+                          M     decf_banksafe pxbuf0 + 23 - (16 + 1), F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - (16 + 1)
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - (16 + 1);, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - (16 + 1)
+                          M     withdest_1 decf pxbuf0 + 23 - (16 + 1)
+0067   03A8               M     decf pxbuf0 + 23 - (16 + 1), F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - (16 + 1) == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+0066                      M     ORG ctx_addr_16
+0068                      M     ORG ctx_addr_17
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - 16
+                          M     decf_banksafe pxbuf0 + 23 - 16, F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - 16
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - 16;, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - 16
+                          M     withdest_1 decf pxbuf0 + 23 - 16
+0069   03A9               M     decf pxbuf0 + 23 - 16, F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - 16 == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+0068                      M     ORG ctx_addr_18
+006A                      M     ORG ctx_addr_19
+                      00363 ws8_send15bits_using4:                ws8_sendbit MOVIW INDF0++, prep_start 14, prep_finish 14;
+006C   0098               M     movwf LATA
+006D   01AA               M     clrf pxbuf0 + 23 - (14 + 1)
+006E   01AB               M     clrf pxbuf0 + 23 - 14
+006F   0198               M     clrf LATA
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - (14 + 1)
+                          M     decf_banksafe pxbuf0 + 23 - (14 + 1), F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - (14 + 1)
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - (14 + 1);, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - (14 + 1)
+                          M     withdest_1 decf pxbuf0 + 23 - (14 + 1)
+0071   03AA               M     decf pxbuf0 + 23 - (14 + 1), F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - (14 + 1) == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+0070                      M     ORG ctx_addr_20
+0072                      M     ORG ctx_addr_21
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - 14
+                          M     decf_banksafe pxbuf0 + 23 - 14, F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - 14
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - 14;, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - 14
+                          M     withdest_1 decf pxbuf0 + 23 - 14
+0073   03AB               M     decf pxbuf0 + 23 - 14, F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - 14 == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+0072                      M     ORG ctx_addr_22
+0074                      M     ORG ctx_addr_23
+                      00364 ws8_send14bits_using4:                ws8_sendbit MOVIW INDF0++, prep_start 12, prep_finish 12;
+0076   0098               M     movwf LATA
+0077   01AC               M     clrf pxbuf0 + 23 - (12 + 1)
+0078   01AD               M     clrf pxbuf0 + 23 - 12
+0079   0198               M     clrf LATA
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - (12 + 1)
+                          M     decf_banksafe pxbuf0 + 23 - (12 + 1), F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - (12 + 1)
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - (12 + 1);, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - (12 + 1)
+                          M     withdest_1 decf pxbuf0 + 23 - (12 + 1)
+007B   03AC               M     decf pxbuf0 + 23 - (12 + 1), F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - (12 + 1) == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+007A                      M     ORG ctx_addr_24
+007C                      M     ORG ctx_addr_25
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - 12
+                          M     decf_banksafe pxbuf0 + 23 - 12, F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - 12
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - 12;, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - 12
+                          M     withdest_1 decf pxbuf0 + 23 - 12
+007D   03AD               M     decf pxbuf0 + 23 - 12, F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - 12 == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+007C                      M     ORG ctx_addr_26
+007E                      M     ORG ctx_addr_27
+                      00365 ws8_send13bits_using4:                ws8_sendbit MOVIW INDF0++, prep_start 10, prep_finish 10;
+0080   0098               M     movwf LATA
+0081   01AE               M     clrf pxbuf0 + 23 - (10 + 1)
+0082   01AF               M     clrf pxbuf0 + 23 - 10
+0083   0198               M     clrf LATA
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - (10 + 1)
+                          M     decf_banksafe pxbuf0 + 23 - (10 + 1), F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - (10 + 1)
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - (10 + 1);, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - (10 + 1)
+                          M     withdest_1 decf pxbuf0 + 23 - (10 + 1)
+0085   03AE               M     decf pxbuf0 + 23 - (10 + 1), F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - (10 + 1) == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+0084                      M     ORG ctx_addr_28
+0086                      M     ORG ctx_addr_29
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - 10
+                          M     decf_banksafe pxbuf0 + 23 - 10, F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - 10
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - 10;, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - 10
+                          M     withdest_1 decf pxbuf0 + 23 - 10
+0087   03AF               M     decf pxbuf0 + 23 - 10, F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - 10 == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+0086                      M     ORG ctx_addr_30
+0088                      M     ORG ctx_addr_31
+                      00366 ws8_send12bits_using4:                ws8_sendbit MOVIW INDF0++, prep_start 8, prep_finish 8;
+008A   0098               M     movwf LATA
+008B   01B0               M     clrf pxbuf0 + 23 - (8 + 1)
+008C   01B1               M     clrf pxbuf0 + 23 - 8
+008D   0198               M     clrf LATA
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - (8 + 1)
+                          M     decf_banksafe pxbuf0 + 23 - (8 + 1), F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - (8 + 1)
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - (8 + 1);, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - (8 + 1)
+                          M     withdest_1 decf pxbuf0 + 23 - (8 + 1)
+008F   03B0               M     decf pxbuf0 + 23 - (8 + 1), F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - (8 + 1) == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+008E                      M     ORG ctx_addr_32
+0090                      M     ORG ctx_addr_33
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - 8
+                          M     decf_banksafe pxbuf0 + 23 - 8, F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - 8
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - 8;, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - 8
+                          M     withdest_1 decf pxbuf0 + 23 - 8
+0091   03B1               M     decf pxbuf0 + 23 - 8, F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - 8 == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+0090                      M     ORG ctx_addr_34
+0092                      M     ORG ctx_addr_35
+                      00367 ws8_send11bits_using4:                ws8_sendbit MOVIW INDF0++, prep_start 6, prep_finish 6;
+0094   0098               M     movwf LATA
+0095   01B2               M     clrf pxbuf0 + 23 - (6 + 1)
+0096   01B3               M     clrf pxbuf0 + 23 - 6
+0097   0198               M     clrf LATA
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - (6 + 1)
+                          M     decf_banksafe pxbuf0 + 23 - (6 + 1), F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - (6 + 1)
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - (6 + 1);, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - (6 + 1)
+                          M     withdest_1 decf pxbuf0 + 23 - (6 + 1)
+0099   03B2               M     decf pxbuf0 + 23 - (6 + 1), F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - (6 + 1) == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+0098                      M     ORG ctx_addr_36
+009A                      M     ORG ctx_addr_37
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - 6
+                          M     decf_banksafe pxbuf0 + 23 - 6, F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - 6
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - 6;, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - 6
+                          M     withdest_1 decf pxbuf0 + 23 - 6
+009B   03B3               M     decf pxbuf0 + 23 - 6, F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - 6 == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+009A                      M     ORG ctx_addr_38
+009C                      M     ORG ctx_addr_39
+                      00368 ws8_send10bits_using4:                ws8_sendbit MOVIW INDF0++, prep_start 4, prep_finish 4;
+009E   0098               M     movwf LATA
+009F   01B4               M     clrf pxbuf0 + 23 - (4 + 1)
+00A0   01B5               M     clrf pxbuf0 + 23 - 4
+00A1   0198               M     clrf LATA
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - (4 + 1)
+                          M     decf_banksafe pxbuf0 + 23 - (4 + 1), F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - (4 + 1)
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - (4 + 1);, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - (4 + 1)
+                          M     withdest_1 decf pxbuf0 + 23 - (4 + 1)
+00A3   03B4               M     decf pxbuf0 + 23 - (4 + 1), F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - (4 + 1) == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+00A2                      M     ORG ctx_addr_40
+00A4                      M     ORG ctx_addr_41
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - 4
+                          M     decf_banksafe pxbuf0 + 23 - 4, F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - 4
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - 4;, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - 4
+                          M     withdest_1 decf pxbuf0 + 23 - 4
+00A5   03B5               M     decf pxbuf0 + 23 - 4, F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - 4 == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+00A4                      M     ORG ctx_addr_42
+00A6                      M     ORG ctx_addr_43
+                      00369 ws8_send9bits_using4:                ws8_sendbit MOVIW INDF0++, prep_start 2, prep_finish 2;
+00A8   0098               M     movwf LATA
+00A9   01B6               M     clrf pxbuf0 + 23 - (2 + 1)
+00AA   01B7               M     clrf pxbuf0 + 23 - 2
+00AB   0198               M     clrf LATA
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - (2 + 1)
+                          M     decf_banksafe pxbuf0 + 23 - (2 + 1), F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - (2 + 1)
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - (2 + 1);, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - (2 + 1)
+                          M     withdest_1 decf pxbuf0 + 23 - (2 + 1)
+00AD   03B6               M     decf pxbuf0 + 23 - (2 + 1), F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - (2 + 1) == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+00AC                      M     ORG ctx_addr_44
+00AE                      M     ORG ctx_addr_45
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - 2
+                          M     decf_banksafe pxbuf0 + 23 - 2, F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - 2
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - 2;, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - 2
+                          M     withdest_1 decf pxbuf0 + 23 - 2
+00AF   03B7               M     decf pxbuf0 + 23 - 2, F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - 2 == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+00AE                      M     ORG ctx_addr_46
+00B0                      M     ORG ctx_addr_47
+                      00370 ws8_send8bits_using4:                ws8_sendbit MOVIW INDF0++, prep_start 0, prep_finish 0;
+00B2   0098               M     movwf LATA
+00B3   01B8               M     clrf pxbuf0 + 23 - (0 + 1)
+00B4   01B9               M     clrf pxbuf0 + 23 - 0
+00B5   0198               M     clrf LATA
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - (0 + 1)
+                          M     decf_banksafe pxbuf0 + 23 - (0 + 1), F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - (0 + 1)
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - (0 + 1);, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - (0 + 1)
+                          M     withdest_1 decf pxbuf0 + 23 - (0 + 1)
+00B7   03B8               M     decf pxbuf0 + 23 - (0 + 1), F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - (0 + 1) == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+00B6                      M     ORG ctx_addr_48
+00B8                      M     ORG ctx_addr_49
+                          M     withdest_1 decf_banksafe pxbuf0 + 23 - 0
+                          M     decf_banksafe pxbuf0 + 23 - 0, F;
+                          M ;    EXPAND_PUSH FALSE
+                          M     BANKCHK pxbuf0 + 23 - 0
+                          M     BANKSAFE EMIT dest_arg(F)    decf pxbuf0 + 23 - 0;, dest;
+                          M ;    EXPAND_PUSH FALSE
+                          M ;    NOEXPAND
+                          M     errorlevel -302  ;this is a useless/annoying message because the assembler doesn't handle it well (always generates warning when accessing registers in bank 1, even if 
+                          M ;    messg BANKSAFE: stmt @2586
+                          M ;        EXPAND_RESTORE
+                          M ;    EXPAND_PUSH TRUE
+                          M     EMIT withdest_1 decf pxbuf0 + 23 - 0
+                          M     withdest_1 decf pxbuf0 + 23 - 0
+00B9   03B9               M     decf pxbuf0 + 23 - 0, F;
+                          M ;    EXPAND_POP
+                          M ;       NOEXPAND
+                          M     errorlevel +302 ;kludge: re-Enable bank switch warning
+                          M ;    EXPAND_RESTORE
+                          M ;    EXPAND_POP
+                          M     if (pxbuf0 + 23 - 0 == WREG) || !BOOL2INT(F)
+                          M WREG_TRACKER = IIF(ISLIT(WREG_TRACKER), WREG_TRACKER + 1, WREG_UNKN)
+                          M     endif
+                          M ;    EXPAND_POP
+00B8                      M     ORG ctx_addr_50
+00BA                      M     ORG ctx_addr_51
+                      00371 ;all prep finished by now
+                      00372 ws8_send7bits_using4:                ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
+00BC   0098               M     movwf LATA
 00BD   28BE               M     goto $+1
-                      00202     endif
-                      00203 ;rewindpx with custom last bit:
-                      00204     ws8_sendbit MOVIW -24[FSR0],      rewindpx BG, call ws8_sendBGbit_7; //call+call = 4 instr
-00C0   0098               M     movwf LATA
-00C2   0000               M     nop
-00C3   0198               M     clrf LATA
-00C5   2053           00205     call ws8_sendBGbit_8;
-00C6   2059           00206     call ws8_sendBGbit_7; //custom bit below
-                      00207     NOP 2; //replaces "call" (next bit is inlined)
-00C7   28C8               M     goto $+1
-                      00208     ws8_sendbit MOVIW INDF0++,      ORG$, NOP 1; //reserve 3 instr for loop ctl
-00CA   0098               M     movwf LATA
-00CB   28CC               M     goto $+1
-00CC   0198               M     clrf LATA
-00CD   0000               M     nop
-                      00209     DECFSZ count, F; //REGLO(count), F; //WREG, F
-                          M     withdest_1 decfsz count
-00CE   0BF0               M     decfsz count, F;
-00CF   28B7           00210     goto fill_loop
-                      00211 ;    REPEAT LITERAL(UNIV_LEN * 3 - 1), call wsoff_#v(8); //NOTE: 1-2 extra bytes here @end
-00D0   0008           00212     return;
-                      00213 
-                      00214 ;color palette:
-                      00215 ;each entry is 24 bytes: colors are 24 bits, and 1 bit from each byte goes to a separate IO pin
-                      00216 ;PICs with 256 bytes RAM can only hold 10 palette entries in RAM; palette indexes use <= 4 bits
-                      00217     b0DCL fgcolor, :24; //8 parallel 24-bit values (1 for each IO pin)
-                          M     CBLOCK NEXT_RAM0; BOOL2INT(banked))  ;continue where we left off last time
-  00000020                M         fgcolor :24
-                          M     ENDC  ;can't span macros
-                      00218     b0DCL bgcolor, :24; //8 parallel 24-bit values (1 for each IO pin)
-                          M     CBLOCK NEXT_RAM0; BOOL2INT(banked))  ;continue where we left off last time
-  00000038                M         bgcolor :24
-                          M     ENDC  ;can't span macros
-  00FF                00219     constant I = 255; //all 8 bits on (readbility, src code alignment)
-  0000                00220     constant O = 0; //BIT(4); //all 8 bits off (or tampered/excluded)
-                      00221 #if 0
-                      00222 palette8_rom:
-                      00223 ;TODO? could compress this but would break PALINX arithmetic
-                      00224     CONSTANT OFF_PALINX = ($ - palette8_rom) / 24;
-                      00225     DW O,O,O,O,O,O,O,O, O,O,O,O,O,O,O,O, O,O,O,O,O,O,O,O;
-                      00226     CONSTANT BLUE_PALINX = ($ - palette8_rom) / 24;
-                      00227     DW O,O,O,O,O,O,O,O, O,O,O,O,O,O,O,O, O,O,O,O,O,O,I,O; //dim
-                      00228 ;//    DW O,O,O,O,O,O,O,O, O,O,O,O,O,O,O,O, I,I,I,I,I,I,I,I; //bright
-                      00229     CONSTANT GREEN_PALINX = ($ - palette8_rom) / 24;
-                      00230     DW O,O,O,O,O,O,O,O, O,O,O,O,O,O,I,O, O,O,O,O,O,O,O,O; //dim
-                      00231 ;//    DW X,X,X,X,X,X,X,X, I,I,I,I,I,I,I,I, O,O,O,O,O,O,O,O; //bright
-                      00232     CONSTANT CYAN_PALINX = ($ - palette8_rom) / 24;
-                      00233     DW O,O,O,O,O,O,O,O, O,O,O,O,O,O,I,O, O,O,O,O,O,O,I,O; //dim
-                      00234 ;//    DW O,O,O,O,O,O,O,O, I,I,I,I,I,I,I,I, I,I,I,I,I,I,I,I; //bright
-                      00235     CONSTANT RED_PALINX = ($ - palette8_rom) / 24;
-                      00236     DW O,O,O,O,O,O,I,O, O,O,O,O,O,O,O,O, O,O,O,O,O,O,O,O; //dim
-                      00237 ;//    DW I,I,I,I,I,I,I,I, O,O,O,O,O,O,O,O, O,O,O,O,O,O,O,O; //bright
-                      00238     CONSTANT MAGENTA_PALINX = ($ - palette8_rom) / 24, PINK_PALINX = MAGENTA_PALINX; easier to spell :P
-                      00239     DW O,O,O,O,O,O,I,O, O,O,O,O,O,O,O,O, O,O,O,O,O,O,I,O; //dim
-                      00240 ;//    DW I,I,I,I,I,I,I,I, O,O,O,O,O,O,O,O, I,I,I,I,I,I,I,I; //bright
-                      00241     CONSTANT YELLOW_PALINX = ($ - palette8_rom) / 24;
-                      00242     DW O,O,O,O,O,O,I,O, O,O,O,O,O,O,I,O, O,O,O,O,O,O,O,O; //dim
-                      00243 ;//    DW I,I,I,I,I,I,I,I, I,I,I,I,I,I,I,I, O,O,O,O,O,O,O,O; //bright
-                      00244     CONSTANT WHITE_PALINX = ($ - palette8_rom) / 24;
-                      00245     DW O,O,O,O,O,O,I,O, O,O,O,O,O,O,I,O, O,O,O,O,O,O,I,O; //dim
-                      00246 ;//    DW I,I,I,I,I,I,I,I, I,I,I,I,I,I,I,I, I,I,I,I,I,I,I,I; //bright
-                      00247     CONSTANT TEST_PALINX = ($ - palette8_rom) / 24; //TEST ONLY; put after END_PALINX?
-                      00248     DW 0x80,0x40,0x20,0x10,0x08,0x04,0x02,0x01, 0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x8, 0xE7,0xD9,0x9D,0x7E,0x18,0x24,0x42,0x81; //test bit pattern to watch in debugger
-                      00249 ;//TODO: add more as needed ...
-                      00250     CONSTANT END_PALINX = ($ - palette8_rom) / 24;
-                      00251 
-                      00252 ;RGB color indexes are 3 lsb; controls R/G/B on/off (for easier color combinations/debug)
-                      00253 ;//#define BRIGHT(rgb)  ((rgb) + 8); brighter variant
-                      00254     ERRIF(YELLOW_PALINX != (RED_PALINX | GREEN_PALINX), [ERROR] yellow 0                 != red 0              + green 0                @254)
-                      00255     ERRIF(CYAN_PALINX != (GREEN_PALINX | BLUE_PALINX), [ERROR] cyan 0               != green 0                + blue 0               @255)
-                      00256     ERRIF(MAGENTA_PALINX != (RED_PALINX | BLUE_PALINX), [ERROR] magenta 0                  != red 0              + blue 0               @256)
-                      00257     ERRIF(WHITE_PALINX != (RED_PALINX | GREEN_PALINX | BLUE_PALINX), [ERROR] white 0                != red 0              + green 0                + blue 0               @2
-                      00258 ;//    CONSTANT CUSTOM_PALINX = BRIGHT(0); caller-defined palette entry
-                      00259 ;    CONSTANT FB_PALINX = 8
-                      00260 ;    CONSTANT BG_PALINX = 9
-                      00261 
-                      00262 
-                      00263 ;with_arg(bgcolor + 0) macro stmt
-                      00264 ;    stmt, bgcolor + 0
-                      00265 ;    endm
-                      00266 fsrxfr macro
-                      00267     MOVIW INDF1++
-                      00268     MOVWI INDF0++
-                      00269 WREG_TRACKER = WREG_UNKN
-                      00270     endm
-                      00271 memcpy macro dest, src, count
-                      00272     if dest != FSR0
-                      00273         mov16 FSR0, dest
-                      00274     endif
-                      00275     if src != FSR1
-                      00276         mov16 FSR1, src
-                      00277     endif
-                      00278     REPEAT count, fsrxfr
-                      00279     endm
-                      00280 
-                      00281 ;INDF takes 1 extra instr cycle to access ROM
-                      00282 ;copy from ROM to RAM to avoid this (simplifies parallel bit banging timing)
-                      00283 ;CAUTION: this is EXPENSIVE (memcpy by itself is 72 instr); only use during frame setup when IO is idle
-                      00284 setbg_frompalette: DROP_CONTEXT;
-                      00285 ;    ANDLW 0x0F; 4 bpp
-                      00286     swapf WREG, W
-                      00287     ANDLW 0xF0; //x16
-                      00288     MOVWF bgcolor; kludge: use as temp
-                      00289     mov16 FSR1, LITERAL(0x8000 + palette8_rom); ; //ROM address: NOTE: adds 1 instr cycle overhead each access
-                      00290 ;    lslf bgcolor, W
-                      00291 ;    ADDWF bgcolor, W; 3x
-                      00292 ;    MOVF bgcolor, W;
-                      00293     lsrf bgcolor, W; //x8
-                      00294     addwf bgcolor, W; //x24; CAUTION: assumes <= 10 (no 8-bit wrap)
-                      00295     ADDWF REGLO(FSR1), F;
-                      00296     ifbit CARRY TRUE, dest_arg(F) INCF REGHI(FSR1)
-                      00297 ;    mov16 FSR#v(BG), LITERAL(bgcolor)
-                      00298 ;    REPEAT LITERAL(24), with_arg(bgcolor + REPEATER) MOVIW INDF#v(BG)++
-                      00299 ;//TODO: use linear addr? 0x2000  skips gaps, but requires extra MOVLW/BSF to set FSR
-                      00300     memcpy LITERAL(bgcolor), FSR1, LITERAL(24);;
-                      00301 ;moved    mov16 FSR#v(BG), LITERAL(bgcolor); //leave FSR pointing to palette entry in RAM; could replace with ADDFSR to save 2 instr
-                      00302     return;
-                      00303 #endif
-                      00304 ;non-ROM version of above:
-                      00305 ;lit takes up same/less prog space as above and runs faster (with opp'ty for additional optimization)
-                      00306 ;var takes up 50% more prog space but also runs faster
-                      00307 setbg_fromrgb macro rgb
-                      00308 ;        REPEAT LITERAL(24), MOVWF bgcolor + REPEATER, LITERAL(0)
-                      00309     LOCAL bit = 23;
-                      00310     while bit
-                      00311         if ISLIT(rgb)
-                      00312 ;           if (rgb) & BIT(bit)
-                      00313 ;               MOVLW 0xFF; //SET8W; set all WREG bits; redundant loads will be optimized out
-                      00314 ;               MOVWF bgcolor + bit;
-                      00315 ;           else
-                      00316 ;               CLRF bgcolor + bit;
-                      00317 ;           endif
-                      00318             mov8 bgcolor + bit, LITERAL(BOOL2INT((rgb) & BIT(bit)) * 0xFF)
-                      00319         else
-                      00320             CLRF bgcolor + bit;
-                      00321             ifbit rgb + bit / 8, bit % 8, TRUE, dest_arg(F) DECF bgcolor + bit
-                      00322         endif
-                      00323 bit -= 1;
-                      00324     endw
-                      00325     endm
-                      00326 
-                      00327 
-                      00328     THREAD_DEF ws_player, 4
+00BE   0198               M     clrf LATA
+00BF   2008               M     call nop4
+                      00373 ws8_send6bits_using4:                ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
+00C2   0098               M     movwf LATA
+00C3   28C4               M     goto $+1
+00C4   0198               M     clrf LATA
+00C5   2008               M     call nop4
+                      00374 ws8_send5bits_using4:                ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
+00C8   0098               M     movwf LATA
+00C9   28CA               M     goto $+1
+00CA   0198               M     clrf LATA
+00CB   2008               M     call nop4
+                      00375 ws8_send4bits_using4:                ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
+00CE   0098               M     movwf LATA
+00CF   28D0               M     goto $+1
+00D0   0198               M     clrf LATA
+00D1   2008               M     call nop4
+                      00376 ws8_send3bits_using4:                ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
+00D4   0098               M     movwf LATA
+00D5   28D6               M     goto $+1
+00D6   0198               M     clrf LATA
+00D7   2008               M     call nop4
+                      00377 ws8_send2bits_using4:                ws8_sendbit MOVIW INDF0++, ORG$, ORG$;;
+00DA   0098               M     movwf LATA
+00DB   28DC               M     goto $+1
+00DC   0198               M     clrf LATA
+00DD   2008               M     call nop4
+                      00378 ws8_send1bits_using4:                ws8_sendbit MOVIW INDF0++, ORG$, return; //return + next call takes 4 instr
+00E0   0098               M     movwf LATA
+00E1   28E2               M     goto $+1
+00E2   0198               M     clrf LATA
+                      00379 
+                      00380 
+                      00381     THREAD_DEF ws_player, 4
                           M     CBLOCK NEXT_RAM9999; BOOL2INT(banked))  ;continue where we left off last time
   00000071                M         stkptr_0 
                           M     ENDC  ;can't span macros
-Message[301]: MESSAGE: (creating ws_player thread# 0 @209, stack size 4, host stack remaining: 12 @1913)
-0021                      M     ORG ctx_addr_2
-0021   28D1               M     goto init_2
-00D1                      M     ORG ctx_addr_3
-00D1                      M init_2:
-00D1   20DB               M     call stack_alloc_0
-00D2   20E1               M     call ws_player
-00D3   28D7               M     goto yield_again
-00D4   017F               M     banksel STKPTR
+Message[301]: MESSAGE: (creating ws_player thread# 0 @228, stack size 4, host stack remaining: 12 @1913)
+0022                      M     ORG ctx_addr_3
+0022   28E4               M     goto init_3
+00E4                      M     ORG ctx_addr_52
+00E4                      M init_3:
+00E4   20EE               M     call stack_alloc_0
+00E5   20F4               M     call ws_player
+00E6   28EA               M     goto yield_again
+00E7   017F               M     banksel STKPTR
                           M     withdest_0 movf STKPTR
-00D5   086D               M     movf STKPTR, W;
-00D6   00F1               M     movwf stkptr_0
-00DA   0008               M     return
-00DB   017F               M     banksel STKPTR
+00E8   086D               M     movf STKPTR, W;
+00E9   00F1               M     movwf stkptr_0
+00ED   0008               M     return
+00EE   017F               M     banksel STKPTR
                           M     withdest_0 movf STKPTR
-00DC   086D               M     movf STKPTR, W;
-00DD   00F1               M     movwf stkptr_0
-00DE   3003               M     movlw 4 - 1
+00EF   086D               M     movf STKPTR, W;
+00F0   00F1               M     movwf stkptr_0
+00F1   3003               M     movlw 4 - 1
                           M     withdest_1 addwf STKPTR
-00DF   07ED               M     addwf STKPTR, F;
+00F2   07ED               M     addwf STKPTR, F;
 Message[301]: MESSAGE: ([DEBUG] 8173 @2005)
-                      00329 ws_player: DROP_CONTEXT;
-                      00330     WAIT 1 sec; give power time to settle, set up timer1 outside player loop
+                      00382 ws_player: DROP_CONTEXT;
+                      00383     WAIT 1 sec; give power time to settle, set up timer1 outside player loop
 Message[301]: MESSAGE: ([TODO] change this to use postscaler 1..16 instead of just powers of 2 (for more accuracy) @1750)
 Message[301]: MESSAGE: ([DEBUG] fps_init 1000000 (1111111 tuned) "usec": "prescaler" 15+1, max intv 2097152, actual 1114112, rollover 136 @1766)
-00E1   3001               M     movlw (((ASM_MSB | (0 | 0 | _1983POSTSCALER << T0OUTPS0))) & ~ASM_MSB)
-00E2   014B               M     banksel T0CON0
-00E3   009E               M     movwf T0CON0
-00E4   304F               M     movlw (((ASM_MSB | (b'010' << T0CS0 | 0 | _1983PRESCALER << T0CKPS0))) & ~ASM_MSB)
-00E5   009F               M     movwf T0CON1
-00E6   019C               M     clrf TMR0L
-00E7   3087               M     movlw (((ASM_MSB | (_1983ROLLOVER - 1))) & ~ASM_MSB)
-00E8   009D               M     movwf TMR0H
+00F4   3001               M     movlw (((ASM_MSB | (0 | 0 | _2974POSTSCALER << T0OUTPS0))) & ~ASM_MSB)
+00F5   014B               M     banksel T0CON0
+00F6   009E               M     movwf T0CON0
+00F7   304F               M     movlw (((ASM_MSB | (b'010' << T0CS0 | 0 | _2974PRESCALER << T0CKPS0))) & ~ASM_MSB)
+00F8   009F               M     movwf T0CON1
+00F9   019C               M     clrf TMR0L
+00FA   3087               M     movlw (((ASM_MSB | (_2974ROLLOVER - 1))) & ~ASM_MSB)
+00FB   009D               M     movwf TMR0H
                           M     withbit_7 bsf T0CON0
-00E9   179E               M     bsf T0CON0, 7
-00EA   014E               M     banksel PIR0
+00FC   179E               M     bsf T0CON0, 7
+00FD   014E               M     banksel PIR0
                           M     withbit_5 bcf PIR0
-00EB   128C               M     bcf PIR0, 5
-00EC   28ED               M     goto $+1
-00EE   28ED               M     goto $-1
-00ED                      M     ORG ctx_addr_6
-00EF                      M     ORG ctx_addr_7
+00FE   128C               M     bcf PIR0, 5
+00FF   2900               M     goto $+1
+0101   2900               M     goto $-1
+0100                      M     ORG ctx_addr_55
+0102                      M     ORG ctx_addr_56
                           M     withbit_5 bcf PIR0
-00EF   128C               M     bcf PIR0, 5
-00F0                  00331 play_loop: ;DROP_CONTEXT
-                      00332 ;    MOVLW RED_PALINX;
-                      00333 ;    CALL setbg_frompalette; doing this while idle < wait
-                      00334     setbg_fromrgb LITERAL(0x020000); ; dim red
-00F0   0140               M     banksel bgcolor + _2155bit
-00F1   01CF               M     clrf bgcolor + _2155bit
-00F2   01CE               M     clrf bgcolor + _2155bit
-00F3   01CD               M     clrf bgcolor + _2155bit
-00F4   01CC               M     clrf bgcolor + _2155bit
-00F5   01CB               M     clrf bgcolor + _2155bit
-00F6   01CA               M     clrf bgcolor + _2155bit
-00F7   30FF               M     movlw (((ASM_MSB | (((((ASM_MSB | (0x020000))) & (1 << (_2155bit))) != 0) * 0xFF))) & ~ASM_MSB)
-00F8   00C9               M     movwf bgcolor + _2155bit
-00F9   01C8               M     clrf bgcolor + _2155bit
-00FA   01C7               M     clrf bgcolor + _2155bit
-00FB   01C6               M     clrf bgcolor + _2155bit
-00FC   01C5               M     clrf bgcolor + _2155bit
-00FD   01C4               M     clrf bgcolor + _2155bit
-00FE   01C3               M     clrf bgcolor + _2155bit
-00FF   01C2               M     clrf bgcolor + _2155bit
-0100   01C1               M     clrf bgcolor + _2155bit
-0101   01C0               M     clrf bgcolor + _2155bit
-0102   01BF               M     clrf bgcolor + _2155bit
-0103   01BE               M     clrf bgcolor + _2155bit
-0104   01BD               M     clrf bgcolor + _2155bit
-0105   01BC               M     clrf bgcolor + _2155bit
-0106   01BB               M     clrf bgcolor + _2155bit
-0107   01BA               M     clrf bgcolor + _2155bit
-0108   01B9               M     clrf bgcolor + _2155bit
-                      00335     WAIT 1 sec
-0109   014E               M     banksel PIR0
-010B   290A               M     goto $-1
-010A                      M     ORG ctx_addr_8
-010C                      M     ORG ctx_addr_9
+0102   128C               M     bcf PIR0, 5
+0103                  00384 play_loop: ;DROP_CONTEXT
+                      00385 ;    MOVLW RED_PALINX;
+                      00386     ws8_sendpx LITERAL(0x020000), LITERAL(1)
+                          M     goto_pagesafe _3146prep_only
+                          M ;    EXPAND_PUSH FALSE
+                          M ; messg here1 @3763
+                          M     ERRIF(LITPAGEOF(_3146prep_only), [ERROR] "dest" _3146prep_only 300 !on page 0: 0    @3764)
+                          M     WARNIF(1031    && !300,      [WARNING] jump to 0 @3765);;
+                          M ; messg here2 @3766
+                          M ;PAGESEL_DROP += 1
+                          M ;    messg goto dest, page tracker #v(PAGE_TRACKER), need page sel? #v(LITPAGEOF(dest)) != #v(LITPAGEOF(PAGE_TRACKER))? #v(LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER))
+                          M     if LITPAGEOF(_3146prep_only) != LITPAGEOF(PAGE_TRACKER)
+                          M         EMIT CLRF PCLATH; PAGESEL dest; kludge: mpasm doesn't want to pagesel
+                          M PAGESEL_KEEP += 1
+                          M     else
+  00000005                M PAGESEL_DROP += 1
+                          M     endif
+                          M ;    EXPAND_RESTORE; NOEXPAND
+                          M ; messg here3 @3776
+                          M     EMIT goto _3146prep_only; PROGDCL 0x2000 | (dest); call dest
+0104   292C               M     goto _3146prep_only
+  0000012C                M PAGE_TRACKER = _3146prep_only;
+                          M ; messg here4 @3779
+                          M ;    NOEXPAND
+                          M ;not needed: fall-thru would be handled by earlier code    DROP_CONTEXT; BSR and WREG unknown here if dest falls through
+                          M ;    EXPAND_POP
+0103                      M     ORG ctx_addr_57
+0105                      M     ORG ctx_addr_58
+0107   0140               M     banksel LATA
+0108   0098               M     movwf LATA
+                          M     withbit_7 bcf BITVARS
+010A   13F0               M     bcf BITVARS, 7
+010B   0198               M     clrf LATA
+010C   01BA               M     clrf (((rgb_next) + (0)))
+010F   0098               M     movwf LATA
+0110   2911               M     goto $+1
+0111   0198               M     clrf LATA
+0112   01BB               M     clrf (((rgb_next) + (1)))
+0115   0098               M     movwf LATA
+0116   2917               M     goto $+1
+0117   0198               M     clrf LATA
+0118   3002               M     movlw ((((ASM_MSB | ((((ASM_MSB | (0x020000))) >> (8 * (2))) & 0xFF)))) & ~ASM_MSB)
+0119   00BC               M     movwf (((rgb_next) + (2)))
+011C   0098               M     movwf LATA
+011D   291E               M     goto $+1
+011E   0198               M     clrf LATA
+011F   2920               M     goto $+1
+0121   2922               M     goto $+1
+0124   0098               M     movwf LATA
+                          M     withdest_1 decfsz pxcount
+0125   0BA0               M     decfsz pxcount, F;
+                          M     withdest_1 incf pxcount0hi
+0126   0AA1               M     incf pxcount0hi, F;
+0127   0198               M     clrf LATA
+0128   0000               M     nop
+                          M     withdest_1 decfsz pxcount0hi
+0129   0BA1               M     decfsz pxcount0hi, F;
+012B   294C               M     goto _3146noprep
+012C   3001               M     movlw (((ASM_MSB | (_3532SRC & 0xFF))) & ~ASM_MSB)
+012D   0140               M     banksel pxcount
+012E   00A0               M     movwf pxcount
+012F   01A1               M     clrf pxcount0hi
+0130   01A2               M     clrf pxbuf0 + 23 - _3146bitnum
+0131   01A3               M     clrf pxbuf0 + 23 - _3146bitnum
+0132   01A4               M     clrf pxbuf0 + 23 - _3146bitnum
+0133   01A5               M     clrf pxbuf0 + 23 - _3146bitnum
+0134   01A6               M     clrf pxbuf0 + 23 - _3146bitnum
+0135   01A7               M     clrf pxbuf0 + 23 - _3146bitnum
+0136   30FF               M     movlw (((ASM_MSB | (((((ASM_MSB | (0x020000))) & (1 << (_3146bitnum))) != 0) * 0xFF))) & ~ASM_MSB)
+0137   00A8               M     movwf pxbuf0 + 23 - _3146bitnum
+0138   01A9               M     clrf pxbuf0 + 23 - _3146bitnum
+0139   01AA               M     clrf pxbuf0 + 23 - _3146bitnum
+013A   01AB               M     clrf pxbuf0 + 23 - _3146bitnum
+013B   01AC               M     clrf pxbuf0 + 23 - _3146bitnum
+013C   01AD               M     clrf pxbuf0 + 23 - _3146bitnum
+013D   01AE               M     clrf pxbuf0 + 23 - _3146bitnum
+013E   01AF               M     clrf pxbuf0 + 23 - _3146bitnum
+013F   01B0               M     clrf pxbuf0 + 23 - _3146bitnum
+0140   01B1               M     clrf pxbuf0 + 23 - _3146bitnum
+0141   01B2               M     clrf pxbuf0 + 23 - _3146bitnum
+0142   01B3               M     clrf pxbuf0 + 23 - _3146bitnum
+0143   01B4               M     clrf pxbuf0 + 23 - _3146bitnum
+0144   01B5               M     clrf pxbuf0 + 23 - _3146bitnum
+0145   01B6               M     clrf pxbuf0 + 23 - _3146bitnum
+0146   01B7               M     clrf pxbuf0 + 23 - _3146bitnum
+0147   01B8               M     clrf pxbuf0 + 23 - _3146bitnum
+0148   303A               M     movlw (((ASM_MSB | (_3903SRC & 0xFF))) & ~ASM_MSB)
+0149   0084               M     movwf FSR0
+014A   0185               M     clrf FSR00hi
+                          M     withbit_7 bsf BITVARS
+014B   17F0               M     bsf BITVARS, 7
+                      00387     ws8_sendpx LITERAL(0x010100), LITERAL(1)
+                          M     goto_pagesafe _3960prep_only
+                          M ;    EXPAND_PUSH FALSE
+                          M ; messg here1 @3763
+                          M     ERRIF(LITPAGEOF(_3960prep_only), [ERROR] "dest" _3960prep_only 372 !on page 0: 0    @3764)
+                          M     WARNIF(1031    && !372,      [WARNING] jump to 0 @3765);;
+                          M ; messg here2 @3766
+                          M ;PAGESEL_DROP += 1
+                          M ;    messg goto dest, page tracker #v(PAGE_TRACKER), need page sel? #v(LITPAGEOF(dest)) != #v(LITPAGEOF(PAGE_TRACKER))? #v(LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER))
+                          M     if LITPAGEOF(_3960prep_only) != LITPAGEOF(PAGE_TRACKER)
+                          M         EMIT CLRF PCLATH; PAGESEL dest; kludge: mpasm doesn't want to pagesel
+                          M PAGESEL_KEEP += 1
+                          M     else
+  00000007                M PAGESEL_DROP += 1
+                          M     endif
+                          M ;    EXPAND_RESTORE; NOEXPAND
+                          M ; messg here3 @3776
+                          M     EMIT goto _3960prep_only; PROGDCL 0x2000 | (dest); call dest
+014D   2974               M     goto _3960prep_only
+  00000174                M PAGE_TRACKER = _3960prep_only;
+                          M ; messg here4 @3779
+                          M ;    NOEXPAND
+                          M ;not needed: fall-thru would be handled by earlier code    DROP_CONTEXT; BSR and WREG unknown here if dest falls through
+                          M ;    EXPAND_POP
+014C                      M     ORG ctx_addr_59
+014E                      M     ORG ctx_addr_60
+0150   0098               M     movwf LATA
+                          M     withbit_7 bcf BITVARS
+0152   13F0               M     bcf BITVARS, 7
+0153   0198               M     clrf LATA
+0154   01BA               M     clrf (((rgb_next) + (0)))
+0157   0098               M     movwf LATA
+0158   2959               M     goto $+1
+0159   0198               M     clrf LATA
+015A   3001               M     movlw ((((ASM_MSB | ((((ASM_MSB | (0x010100))) >> (8 * (1))) & 0xFF)))) & ~ASM_MSB)
+015B   00BB               M     movwf (((rgb_next) + (1)))
+015E   0098               M     movwf LATA
+015F   2960               M     goto $+1
+0160   0198               M     clrf LATA
+0161   00BC               M     movwf (((rgb_next) + (2)))
+0164   0098               M     movwf LATA
+0165   2966               M     goto $+1
+0166   0198               M     clrf LATA
+0167   2968               M     goto $+1
+0169   296A               M     goto $+1
+016C   0098               M     movwf LATA
+                          M     withdest_1 decfsz pxcount
+016D   0BA0               M     decfsz pxcount, F;
+                          M     withdest_1 incf pxcount0hi
+016E   0AA1               M     incf pxcount0hi, F;
+016F   0198               M     clrf LATA
+0170   0000               M     nop
+                          M     withdest_1 decfsz pxcount0hi
+0171   0BA1               M     decfsz pxcount0hi, F;
+0173   2994               M     goto _3960noprep
+0174   3001               M     movlw (((ASM_MSB | (_4341SRC & 0xFF))) & ~ASM_MSB)
+0175   0140               M     banksel pxcount
+0176   00A0               M     movwf pxcount
+0177   01A1               M     clrf pxcount0hi
+0178   01A2               M     clrf pxbuf0 + 23 - _3960bitnum
+0179   01A3               M     clrf pxbuf0 + 23 - _3960bitnum
+017A   01A4               M     clrf pxbuf0 + 23 - _3960bitnum
+017B   01A5               M     clrf pxbuf0 + 23 - _3960bitnum
+017C   01A6               M     clrf pxbuf0 + 23 - _3960bitnum
+017D   01A7               M     clrf pxbuf0 + 23 - _3960bitnum
+017E   01A8               M     clrf pxbuf0 + 23 - _3960bitnum
+017F   30FF               M     movlw (((ASM_MSB | (((((ASM_MSB | (0x010100))) & (1 << (_3960bitnum))) != 0) * 0xFF))) & ~ASM_MSB)
+0180   00A9               M     movwf pxbuf0 + 23 - _3960bitnum
+0181   01AA               M     clrf pxbuf0 + 23 - _3960bitnum
+0182   01AB               M     clrf pxbuf0 + 23 - _3960bitnum
+0183   01AC               M     clrf pxbuf0 + 23 - _3960bitnum
+0184   01AD               M     clrf pxbuf0 + 23 - _3960bitnum
+0185   01AE               M     clrf pxbuf0 + 23 - _3960bitnum
+0186   01AF               M     clrf pxbuf0 + 23 - _3960bitnum
+0187   01B0               M     clrf pxbuf0 + 23 - _3960bitnum
+0188   00B1               M     movwf pxbuf0 + 23 - _3960bitnum
+0189   01B2               M     clrf pxbuf0 + 23 - _3960bitnum
+018A   01B3               M     clrf pxbuf0 + 23 - _3960bitnum
+018B   01B4               M     clrf pxbuf0 + 23 - _3960bitnum
+018C   01B5               M     clrf pxbuf0 + 23 - _3960bitnum
+018D   01B6               M     clrf pxbuf0 + 23 - _3960bitnum
+018E   01B7               M     clrf pxbuf0 + 23 - _3960bitnum
+018F   01B8               M     clrf pxbuf0 + 23 - _3960bitnum
+0190   303A               M     movlw (((ASM_MSB | (_4712SRC & 0xFF))) & ~ASM_MSB)
+0191   0084               M     movwf FSR0
+0192   0185               M     clrf FSR00hi
+                          M     withbit_7 bsf BITVARS
+0193   17F0               M     bsf BITVARS, 7
+                      00388     ws8_sendpx LITERAL(0x010001), LITERAL(UNIV_LEN-2)
+                          M     goto_pagesafe _4769prep_only
+                          M ;    EXPAND_PUSH FALSE
+                          M ; messg here1 @3763
+                          M     ERRIF(LITPAGEOF(_4769prep_only), [ERROR] "dest" _4769prep_only 433 !on page 0: 0    @3764)
+                          M     WARNIF(1031    && !433,      [WARNING] jump to 0 @3765);;
+                          M ; messg here2 @3766
+                          M ;PAGESEL_DROP += 1
+                          M ;    messg goto dest, page tracker #v(PAGE_TRACKER), need page sel? #v(LITPAGEOF(dest)) != #v(LITPAGEOF(PAGE_TRACKER))? #v(LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER))
+                          M     if LITPAGEOF(_4769prep_only) != LITPAGEOF(PAGE_TRACKER)
+                          M         EMIT CLRF PCLATH; PAGESEL dest; kludge: mpasm doesn't want to pagesel
+                          M PAGESEL_KEEP += 1
+                          M     else
+  00000009                M PAGESEL_DROP += 1
+                          M     endif
+                          M ;    EXPAND_RESTORE; NOEXPAND
+                          M ; messg here3 @3776
+                          M     EMIT goto _4769prep_only; PROGDCL 0x2000 | (dest); call dest
+0195   29B1               M     goto _4769prep_only
+  000001B1                M PAGE_TRACKER = _4769prep_only;
+                          M ; messg here4 @3779
+                          M ;    NOEXPAND
+                          M ;not needed: fall-thru would be handled by earlier code    DROP_CONTEXT; BSR and WREG unknown here if dest falls through
+                          M ;    EXPAND_POP
+0194                      M     ORG ctx_addr_61
+0196                      M     ORG ctx_addr_62
+0198   0098               M     movwf LATA
+                          M     withbit_7 bcf BITVARS
+019A   13F0               M     bcf BITVARS, 7
+019B   0198               M     clrf LATA
+019C   3001               M     movlw ((((ASM_MSB | ((((ASM_MSB | (0x010001))) >> (8 * (0))) & 0xFF)))) & ~ASM_MSB)
+019D   00BA               M     movwf (((rgb_next) + (0)))
+019E   01BB               M     clrf (((rgb_next) + (1)))
+01A1   0098               M     movwf LATA
+01A2   00BC               M     movwf (((rgb_next) + (2)))
+01A3   0198               M     clrf LATA
+01A4   29A5               M     goto $+1
+01A6   29A7               M     goto $+1
+01A9   0098               M     movwf LATA
+                          M     withdest_1 decfsz pxcount
+01AA   0BA0               M     decfsz pxcount, F;
+                          M     withdest_1 incf pxcount0hi
+01AB   0AA1               M     incf pxcount0hi, F;
+01AC   0198               M     clrf LATA
+01AD   0000               M     nop
+                          M     withdest_1 decfsz pxcount0hi
+01AE   0BA1               M     decfsz pxcount0hi, F;
+01B0   29D2               M     goto _4769noprep
+01B1   303E               M     movlw (((ASM_MSB | (_5059SRC & 0xFF))) & ~ASM_MSB)
+01B2   0140               M     banksel pxcount
+01B3   00A0               M     movwf pxcount
+01B4   3006               M     movlw (((ASM_MSB | (_5059SRC >> 8 & 0xFF))) & ~ASM_MSB)
+01B5   00A1               M     movwf pxcount0hi
+01B6   01A2               M     clrf pxbuf0 + 23 - _4769bitnum
+01B7   01A3               M     clrf pxbuf0 + 23 - _4769bitnum
+01B8   01A4               M     clrf pxbuf0 + 23 - _4769bitnum
+01B9   01A5               M     clrf pxbuf0 + 23 - _4769bitnum
+01BA   01A6               M     clrf pxbuf0 + 23 - _4769bitnum
+01BB   01A7               M     clrf pxbuf0 + 23 - _4769bitnum
+01BC   01A8               M     clrf pxbuf0 + 23 - _4769bitnum
+01BD   30FF               M     movlw (((ASM_MSB | (((((ASM_MSB | (0x010001))) & (1 << (_4769bitnum))) != 0) * 0xFF))) & ~ASM_MSB)
+01BE   00A9               M     movwf pxbuf0 + 23 - _4769bitnum
+01BF   01AA               M     clrf pxbuf0 + 23 - _4769bitnum
+01C0   01AB               M     clrf pxbuf0 + 23 - _4769bitnum
+01C1   01AC               M     clrf pxbuf0 + 23 - _4769bitnum
+01C2   01AD               M     clrf pxbuf0 + 23 - _4769bitnum
+01C3   01AE               M     clrf pxbuf0 + 23 - _4769bitnum
+01C4   01AF               M     clrf pxbuf0 + 23 - _4769bitnum
+01C5   01B0               M     clrf pxbuf0 + 23 - _4769bitnum
+01C6   01B1               M     clrf pxbuf0 + 23 - _4769bitnum
+01C7   01B2               M     clrf pxbuf0 + 23 - _4769bitnum
+01C8   01B3               M     clrf pxbuf0 + 23 - _4769bitnum
+01C9   01B4               M     clrf pxbuf0 + 23 - _4769bitnum
+01CA   01B5               M     clrf pxbuf0 + 23 - _4769bitnum
+01CB   01B6               M     clrf pxbuf0 + 23 - _4769bitnum
+01CC   01B7               M     clrf pxbuf0 + 23 - _4769bitnum
+01CD   01B8               M     clrf pxbuf0 + 23 - _4769bitnum
+01CE   303A               M     movlw (((ASM_MSB | (_5437SRC & 0xFF))) & ~ASM_MSB)
+01CF   0084               M     movwf FSR0
+01D0   0185               M     clrf FSR00hi
+                          M     withbit_7 bsf BITVARS
+01D1   17F0               M     bsf BITVARS, 7
+                      00389     ws8_sendpx 0, LITERAL(0); ; flush
+                          M     goto_pagesafe _5494prep_only
+                          M ;    EXPAND_PUSH FALSE
+                          M ; messg here1 @3763
+                          M     ERRIF(LITPAGEOF(_5494prep_only), [ERROR] "dest" _5494prep_only 487 !on page 0: 0    @3764)
+                          M     WARNIF(1031    && !487,      [WARNING] jump to 0 @3765);;
+                          M ; messg here2 @3766
+                          M ;PAGESEL_DROP += 1
+                          M ;    messg goto dest, page tracker #v(PAGE_TRACKER), need page sel? #v(LITPAGEOF(dest)) != #v(LITPAGEOF(PAGE_TRACKER))? #v(LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER))
+                          M     if LITPAGEOF(_5494prep_only) != LITPAGEOF(PAGE_TRACKER)
+                          M         EMIT CLRF PCLATH; PAGESEL dest; kludge: mpasm doesn't want to pagesel
+                          M PAGESEL_KEEP += 1
+                          M     else
+  0000000B                M PAGESEL_DROP += 1
+                          M     endif
+                          M ;    EXPAND_RESTORE; NOEXPAND
+                          M ; messg here3 @3776
+                          M     EMIT goto _5494prep_only; PROGDCL 0x2000 | (dest); call dest
+01D3   29E7               M     goto _5494prep_only
+  000001E7                M PAGE_TRACKER = _5494prep_only;
+                          M ; messg here4 @3779
+                          M ;    NOEXPAND
+                          M ;not needed: fall-thru would be handled by earlier code    DROP_CONTEXT; BSR and WREG unknown here if dest falls through
+                          M ;    EXPAND_POP
+01D2                      M     ORG ctx_addr_63
+01D4                      M     ORG ctx_addr_64
+01D6   0098               M     movwf LATA
+                          M     withbit_7 bcf BITVARS
+01D8   13F0               M     bcf BITVARS, 7
+01D9   0198               M     clrf LATA
+01DA   29DB               M     goto $+1
+01DC   29DD               M     goto $+1
+01DF   0098               M     movwf LATA
+                          M     withdest_1 decfsz pxcount
+01E0   0BA0               M     decfsz pxcount, F;
+                          M     withdest_1 incf pxcount0hi
+01E1   0AA1               M     incf pxcount0hi, F;
+01E2   0198               M     clrf LATA
+01E3   0000               M     nop
+                          M     withdest_1 decfsz pxcount0hi
+01E4   0BA1               M     decfsz pxcount0hi, F;
+01E6   29E7               M     goto _5494noprep
+                      00390     WAIT 1 sec
+01E7   014E               M     banksel PIR0
+01E9   29E8               M     goto $-1
+01E8                      M     ORG ctx_addr_65
+01EA                      M     ORG ctx_addr_66
                           M     withbit_5 bcf PIR0
-010C   128C               M     bcf PIR0, 5
-                      00336     CALL ws_fillbg;
-010D   20B1               M     call ws_fillbg
-                      00337 ;    setbit LATA, LEDOUT, TRUE;
-                      00338 ;    MOVLW GREEN_PALINX;
-                      00339 ;    CALL setbg_frompalette; doing this while idle < wait
-                      00340     setbg_fromrgb LITERAL(0x000200); ; dim green
-010E   0140               M     banksel bgcolor + _2549bit
-010F   01CF               M     clrf bgcolor + _2549bit
-0110   01CE               M     clrf bgcolor + _2549bit
-0111   01CD               M     clrf bgcolor + _2549bit
-0112   01CC               M     clrf bgcolor + _2549bit
-0113   01CB               M     clrf bgcolor + _2549bit
-0114   01CA               M     clrf bgcolor + _2549bit
-0115   01C9               M     clrf bgcolor + _2549bit
-0116   01C8               M     clrf bgcolor + _2549bit
-0117   01C7               M     clrf bgcolor + _2549bit
-0118   01C6               M     clrf bgcolor + _2549bit
-0119   01C5               M     clrf bgcolor + _2549bit
-011A   01C4               M     clrf bgcolor + _2549bit
-011B   01C3               M     clrf bgcolor + _2549bit
-011C   01C2               M     clrf bgcolor + _2549bit
-011D   30FF               M     movlw (((ASM_MSB | (((((ASM_MSB | (0x000200))) & (1 << (_2549bit))) != 0) * 0xFF))) & ~ASM_MSB)
-011E   00C1               M     movwf bgcolor + _2549bit
-011F   01C0               M     clrf bgcolor + _2549bit
-0120   01BF               M     clrf bgcolor + _2549bit
-0121   01BE               M     clrf bgcolor + _2549bit
-0122   01BD               M     clrf bgcolor + _2549bit
-0123   01BC               M     clrf bgcolor + _2549bit
-0124   01BB               M     clrf bgcolor + _2549bit
-0125   01BA               M     clrf bgcolor + _2549bit
-0126   01B9               M     clrf bgcolor + _2549bit
-                      00341     WAIT 1 sec
-0127   014E               M     banksel PIR0
-0129   2928               M     goto $-1
-0128                      M     ORG ctx_addr_10
-012A                      M     ORG ctx_addr_11
+01EA   128C               M     bcf PIR0, 5
+                      00391 ;    MOVLW GREEN_PALINX;
+                      00392     ws8_sendpx LITERAL(0x000200), LITERAL(1)
+                          M     goto_pagesafe _5737prep_only
+                          M ;    EXPAND_PUSH FALSE
+                          M ; messg here1 @3763
+                          M     ERRIF(LITPAGEOF(_5737prep_only), [ERROR] "dest" _5737prep_only 532 !on page 0: 0    @3764)
+                          M     WARNIF(1031    && !532,      [WARNING] jump to 0 @3765);;
+                          M ; messg here2 @3766
+                          M ;PAGESEL_DROP += 1
+                          M ;    messg goto dest, page tracker #v(PAGE_TRACKER), need page sel? #v(LITPAGEOF(dest)) != #v(LITPAGEOF(PAGE_TRACKER))? #v(LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER))
+                          M     if LITPAGEOF(_5737prep_only) != LITPAGEOF(PAGE_TRACKER)
+                          M         EMIT CLRF PCLATH; PAGESEL dest; kludge: mpasm doesn't want to pagesel
+                          M PAGESEL_KEEP += 1
+                          M     else
+  0000000D                M PAGESEL_DROP += 1
+                          M     endif
+                          M ;    EXPAND_RESTORE; NOEXPAND
+                          M ; messg here3 @3776
+                          M     EMIT goto _5737prep_only; PROGDCL 0x2000 | (dest); call dest
+01EC   2A14               M     goto _5737prep_only
+  00000214                M PAGE_TRACKER = _5737prep_only;
+                          M ; messg here4 @3779
+                          M ;    NOEXPAND
+                          M ;not needed: fall-thru would be handled by earlier code    DROP_CONTEXT; BSR and WREG unknown here if dest falls through
+                          M ;    EXPAND_POP
+01EB                      M     ORG ctx_addr_67
+01ED                      M     ORG ctx_addr_68
+01EF   0140               M     banksel LATA
+01F0   0098               M     movwf LATA
+                          M     withbit_7 bcf BITVARS
+01F2   13F0               M     bcf BITVARS, 7
+01F3   0198               M     clrf LATA
+01F4   01BA               M     clrf (((rgb_next) + (0)))
+01F7   0098               M     movwf LATA
+01F8   29F9               M     goto $+1
+01F9   0198               M     clrf LATA
+01FA   3002               M     movlw ((((ASM_MSB | ((((ASM_MSB | (0x000200))) >> (8 * (1))) & 0xFF)))) & ~ASM_MSB)
+01FB   00BB               M     movwf (((rgb_next) + (1)))
+01FE   0098               M     movwf LATA
+01FF   2A00               M     goto $+1
+0200   0198               M     clrf LATA
+0201   01BC               M     clrf (((rgb_next) + (2)))
+0204   0098               M     movwf LATA
+0205   2A06               M     goto $+1
+0206   0198               M     clrf LATA
+0207   2A08               M     goto $+1
+0209   2A0A               M     goto $+1
+020C   0098               M     movwf LATA
+                          M     withdest_1 decfsz pxcount
+020D   0BA0               M     decfsz pxcount, F;
+                          M     withdest_1 incf pxcount0hi
+020E   0AA1               M     incf pxcount0hi, F;
+020F   0198               M     clrf LATA
+0210   0000               M     nop
+                          M     withdest_1 decfsz pxcount0hi
+0211   0BA1               M     decfsz pxcount0hi, F;
+0213   2A34               M     goto _5737noprep
+0214   3001               M     movlw (((ASM_MSB | (_6123SRC & 0xFF))) & ~ASM_MSB)
+0215   0140               M     banksel pxcount
+0216   00A0               M     movwf pxcount
+0217   01A1               M     clrf pxcount0hi
+0218   01A2               M     clrf pxbuf0 + 23 - _5737bitnum
+0219   01A3               M     clrf pxbuf0 + 23 - _5737bitnum
+021A   01A4               M     clrf pxbuf0 + 23 - _5737bitnum
+021B   01A5               M     clrf pxbuf0 + 23 - _5737bitnum
+021C   01A6               M     clrf pxbuf0 + 23 - _5737bitnum
+021D   01A7               M     clrf pxbuf0 + 23 - _5737bitnum
+021E   01A8               M     clrf pxbuf0 + 23 - _5737bitnum
+021F   01A9               M     clrf pxbuf0 + 23 - _5737bitnum
+0220   01AA               M     clrf pxbuf0 + 23 - _5737bitnum
+0221   01AB               M     clrf pxbuf0 + 23 - _5737bitnum
+0222   01AC               M     clrf pxbuf0 + 23 - _5737bitnum
+0223   01AD               M     clrf pxbuf0 + 23 - _5737bitnum
+0224   01AE               M     clrf pxbuf0 + 23 - _5737bitnum
+0225   01AF               M     clrf pxbuf0 + 23 - _5737bitnum
+0226   30FF               M     movlw (((ASM_MSB | (((((ASM_MSB | (0x000200))) & (1 << (_5737bitnum))) != 0) * 0xFF))) & ~ASM_MSB)
+0227   00B0               M     movwf pxbuf0 + 23 - _5737bitnum
+0228   01B1               M     clrf pxbuf0 + 23 - _5737bitnum
+0229   01B2               M     clrf pxbuf0 + 23 - _5737bitnum
+022A   01B3               M     clrf pxbuf0 + 23 - _5737bitnum
+022B   01B4               M     clrf pxbuf0 + 23 - _5737bitnum
+022C   01B5               M     clrf pxbuf0 + 23 - _5737bitnum
+022D   01B6               M     clrf pxbuf0 + 23 - _5737bitnum
+022E   01B7               M     clrf pxbuf0 + 23 - _5737bitnum
+022F   01B8               M     clrf pxbuf0 + 23 - _5737bitnum
+0230   303A               M     movlw (((ASM_MSB | (_6494SRC & 0xFF))) & ~ASM_MSB)
+0231   0084               M     movwf FSR0
+0232   0185               M     clrf FSR00hi
+                          M     withbit_7 bsf BITVARS
+0233   17F0               M     bsf BITVARS, 7
+                      00393     ws8_sendpx LITERAL(0x000101), LITERAL(1)
+                          M     goto_pagesafe _6551prep_only
+                          M ;    EXPAND_PUSH FALSE
+                          M ; messg here1 @3763
+                          M     ERRIF(LITPAGEOF(_6551prep_only), [ERROR] "dest" _6551prep_only 593 !on page 0: 0    @3764)
+                          M     WARNIF(1031    && !593,      [WARNING] jump to 0 @3765);;
+                          M ; messg here2 @3766
+                          M ;PAGESEL_DROP += 1
+                          M ;    messg goto dest, page tracker #v(PAGE_TRACKER), need page sel? #v(LITPAGEOF(dest)) != #v(LITPAGEOF(PAGE_TRACKER))? #v(LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER))
+                          M     if LITPAGEOF(_6551prep_only) != LITPAGEOF(PAGE_TRACKER)
+                          M         EMIT CLRF PCLATH; PAGESEL dest; kludge: mpasm doesn't want to pagesel
+                          M PAGESEL_KEEP += 1
+                          M     else
+  0000000F                M PAGESEL_DROP += 1
+                          M     endif
+                          M ;    EXPAND_RESTORE; NOEXPAND
+                          M ; messg here3 @3776
+                          M     EMIT goto _6551prep_only; PROGDCL 0x2000 | (dest); call dest
+0235   2A51               M     goto _6551prep_only
+  00000251                M PAGE_TRACKER = _6551prep_only;
+                          M ; messg here4 @3779
+                          M ;    NOEXPAND
+                          M ;not needed: fall-thru would be handled by earlier code    DROP_CONTEXT; BSR and WREG unknown here if dest falls through
+                          M ;    EXPAND_POP
+0234                      M     ORG ctx_addr_69
+0236                      M     ORG ctx_addr_70
+0238   0098               M     movwf LATA
+                          M     withbit_7 bcf BITVARS
+023A   13F0               M     bcf BITVARS, 7
+023B   0198               M     clrf LATA
+023C   3001               M     movlw ((((ASM_MSB | ((((ASM_MSB | (0x000101))) >> (8 * (0))) & 0xFF)))) & ~ASM_MSB)
+023D   00BA               M     movwf (((rgb_next) + (0)))
+023E   00BB               M     movwf (((rgb_next) + (1)))
+0241   0098               M     movwf LATA
+0242   01BC               M     clrf (((rgb_next) + (2)))
+0243   0198               M     clrf LATA
+0244   2A45               M     goto $+1
+0246   2A47               M     goto $+1
+0249   0098               M     movwf LATA
+                          M     withdest_1 decfsz pxcount
+024A   0BA0               M     decfsz pxcount, F;
+                          M     withdest_1 incf pxcount0hi
+024B   0AA1               M     incf pxcount0hi, F;
+024C   0198               M     clrf LATA
+024D   0000               M     nop
+                          M     withdest_1 decfsz pxcount0hi
+024E   0BA1               M     decfsz pxcount0hi, F;
+0250   2A71               M     goto _6551noprep
+0251   3001               M     movlw (((ASM_MSB | (_6841SRC & 0xFF))) & ~ASM_MSB)
+0252   0140               M     banksel pxcount
+0253   00A0               M     movwf pxcount
+0254   01A1               M     clrf pxcount0hi
+0255   01A2               M     clrf pxbuf0 + 23 - _6551bitnum
+0256   01A3               M     clrf pxbuf0 + 23 - _6551bitnum
+0257   01A4               M     clrf pxbuf0 + 23 - _6551bitnum
+0258   01A5               M     clrf pxbuf0 + 23 - _6551bitnum
+0259   01A6               M     clrf pxbuf0 + 23 - _6551bitnum
+025A   01A7               M     clrf pxbuf0 + 23 - _6551bitnum
+025B   01A8               M     clrf pxbuf0 + 23 - _6551bitnum
+025C   01A9               M     clrf pxbuf0 + 23 - _6551bitnum
+025D   01AA               M     clrf pxbuf0 + 23 - _6551bitnum
+025E   01AB               M     clrf pxbuf0 + 23 - _6551bitnum
+025F   01AC               M     clrf pxbuf0 + 23 - _6551bitnum
+0260   01AD               M     clrf pxbuf0 + 23 - _6551bitnum
+0261   01AE               M     clrf pxbuf0 + 23 - _6551bitnum
+0262   01AF               M     clrf pxbuf0 + 23 - _6551bitnum
+0263   01B0               M     clrf pxbuf0 + 23 - _6551bitnum
+0264   30FF               M     movlw (((ASM_MSB | (((((ASM_MSB | (0x000101))) & (1 << (_6551bitnum))) != 0) * 0xFF))) & ~ASM_MSB)
+0265   00B1               M     movwf pxbuf0 + 23 - _6551bitnum
+0266   01B2               M     clrf pxbuf0 + 23 - _6551bitnum
+0267   01B3               M     clrf pxbuf0 + 23 - _6551bitnum
+0268   01B4               M     clrf pxbuf0 + 23 - _6551bitnum
+0269   01B5               M     clrf pxbuf0 + 23 - _6551bitnum
+026A   01B6               M     clrf pxbuf0 + 23 - _6551bitnum
+026B   01B7               M     clrf pxbuf0 + 23 - _6551bitnum
+026C   01B8               M     clrf pxbuf0 + 23 - _6551bitnum
+026D   303A               M     movlw (((ASM_MSB | (_7212SRC & 0xFF))) & ~ASM_MSB)
+026E   0084               M     movwf FSR0
+026F   0185               M     clrf FSR00hi
+                          M     withbit_7 bsf BITVARS
+0270   17F0               M     bsf BITVARS, 7
+                      00394     ws8_sendpx LITERAL(0x010100), LITERAL(UNIV_LEN-2)
+                          M     goto_pagesafe _7269prep_only
+                          M ;    EXPAND_PUSH FALSE
+                          M ; messg here1 @3763
+                          M     ERRIF(LITPAGEOF(_7269prep_only), [ERROR] "dest" _7269prep_only 665 !on page 0: 0    @3764)
+                          M     WARNIF(1031    && !665,      [WARNING] jump to 0 @3765);;
+                          M ; messg here2 @3766
+                          M ;PAGESEL_DROP += 1
+                          M ;    messg goto dest, page tracker #v(PAGE_TRACKER), need page sel? #v(LITPAGEOF(dest)) != #v(LITPAGEOF(PAGE_TRACKER))? #v(LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER))
+                          M     if LITPAGEOF(_7269prep_only) != LITPAGEOF(PAGE_TRACKER)
+                          M         EMIT CLRF PCLATH; PAGESEL dest; kludge: mpasm doesn't want to pagesel
+                          M PAGESEL_KEEP += 1
+                          M     else
+  00000011                M PAGESEL_DROP += 1
+                          M     endif
+                          M ;    EXPAND_RESTORE; NOEXPAND
+                          M ; messg here3 @3776
+                          M     EMIT goto _7269prep_only; PROGDCL 0x2000 | (dest); call dest
+0272   2A99               M     goto _7269prep_only
+  00000299                M PAGE_TRACKER = _7269prep_only;
+                          M ; messg here4 @3779
+                          M ;    NOEXPAND
+                          M ;not needed: fall-thru would be handled by earlier code    DROP_CONTEXT; BSR and WREG unknown here if dest falls through
+                          M ;    EXPAND_POP
+0271                      M     ORG ctx_addr_71
+0273                      M     ORG ctx_addr_72
+0275   0098               M     movwf LATA
+                          M     withbit_7 bcf BITVARS
+0277   13F0               M     bcf BITVARS, 7
+0278   0198               M     clrf LATA
+0279   01BA               M     clrf (((rgb_next) + (0)))
+027C   0098               M     movwf LATA
+027D   2A7E               M     goto $+1
+027E   0198               M     clrf LATA
+027F   3001               M     movlw ((((ASM_MSB | ((((ASM_MSB | (0x010100))) >> (8 * (1))) & 0xFF)))) & ~ASM_MSB)
+0280   00BB               M     movwf (((rgb_next) + (1)))
+0283   0098               M     movwf LATA
+0284   2A85               M     goto $+1
+0285   0198               M     clrf LATA
+0286   00BC               M     movwf (((rgb_next) + (2)))
+0289   0098               M     movwf LATA
+028A   2A8B               M     goto $+1
+028B   0198               M     clrf LATA
+028C   2A8D               M     goto $+1
+028E   2A8F               M     goto $+1
+0291   0098               M     movwf LATA
+                          M     withdest_1 decfsz pxcount
+0292   0BA0               M     decfsz pxcount, F;
+                          M     withdest_1 incf pxcount0hi
+0293   0AA1               M     incf pxcount0hi, F;
+0294   0198               M     clrf LATA
+0295   0000               M     nop
+                          M     withdest_1 decfsz pxcount0hi
+0296   0BA1               M     decfsz pxcount0hi, F;
+0298   2ABA               M     goto _7269noprep
+0299   303E               M     movlw (((ASM_MSB | (_7650SRC & 0xFF))) & ~ASM_MSB)
+029A   0140               M     banksel pxcount
+029B   00A0               M     movwf pxcount
+029C   3006               M     movlw (((ASM_MSB | (_7650SRC >> 8 & 0xFF))) & ~ASM_MSB)
+029D   00A1               M     movwf pxcount0hi
+029E   01A2               M     clrf pxbuf0 + 23 - _7269bitnum
+029F   01A3               M     clrf pxbuf0 + 23 - _7269bitnum
+02A0   01A4               M     clrf pxbuf0 + 23 - _7269bitnum
+02A1   01A5               M     clrf pxbuf0 + 23 - _7269bitnum
+02A2   01A6               M     clrf pxbuf0 + 23 - _7269bitnum
+02A3   01A7               M     clrf pxbuf0 + 23 - _7269bitnum
+02A4   01A8               M     clrf pxbuf0 + 23 - _7269bitnum
+02A5   30FF               M     movlw (((ASM_MSB | (((((ASM_MSB | (0x010100))) & (1 << (_7269bitnum))) != 0) * 0xFF))) & ~ASM_MSB)
+02A6   00A9               M     movwf pxbuf0 + 23 - _7269bitnum
+02A7   01AA               M     clrf pxbuf0 + 23 - _7269bitnum
+02A8   01AB               M     clrf pxbuf0 + 23 - _7269bitnum
+02A9   01AC               M     clrf pxbuf0 + 23 - _7269bitnum
+02AA   01AD               M     clrf pxbuf0 + 23 - _7269bitnum
+02AB   01AE               M     clrf pxbuf0 + 23 - _7269bitnum
+02AC   01AF               M     clrf pxbuf0 + 23 - _7269bitnum
+02AD   01B0               M     clrf pxbuf0 + 23 - _7269bitnum
+02AE   00B1               M     movwf pxbuf0 + 23 - _7269bitnum
+02AF   01B2               M     clrf pxbuf0 + 23 - _7269bitnum
+02B0   01B3               M     clrf pxbuf0 + 23 - _7269bitnum
+02B1   01B4               M     clrf pxbuf0 + 23 - _7269bitnum
+02B2   01B5               M     clrf pxbuf0 + 23 - _7269bitnum
+02B3   01B6               M     clrf pxbuf0 + 23 - _7269bitnum
+02B4   01B7               M     clrf pxbuf0 + 23 - _7269bitnum
+02B5   01B8               M     clrf pxbuf0 + 23 - _7269bitnum
+02B6   303A               M     movlw (((ASM_MSB | (_8028SRC & 0xFF))) & ~ASM_MSB)
+02B7   0084               M     movwf FSR0
+02B8   0185               M     clrf FSR00hi
+                          M     withbit_7 bsf BITVARS
+02B9   17F0               M     bsf BITVARS, 7
+                      00395     ws8_sendpx 0, LITERAL(0); ; flush
+                          M     goto_pagesafe _8085prep_only
+                          M ;    EXPAND_PUSH FALSE
+                          M ; messg here1 @3763
+                          M     ERRIF(LITPAGEOF(_8085prep_only), [ERROR] "dest" _8085prep_only 719 !on page 0: 0    @3764)
+                          M     WARNIF(1031    && !719,      [WARNING] jump to 0 @3765);;
+                          M ; messg here2 @3766
+                          M ;PAGESEL_DROP += 1
+                          M ;    messg goto dest, page tracker #v(PAGE_TRACKER), need page sel? #v(LITPAGEOF(dest)) != #v(LITPAGEOF(PAGE_TRACKER))? #v(LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER))
+                          M     if LITPAGEOF(_8085prep_only) != LITPAGEOF(PAGE_TRACKER)
+                          M         EMIT CLRF PCLATH; PAGESEL dest; kludge: mpasm doesn't want to pagesel
+                          M PAGESEL_KEEP += 1
+                          M     else
+  00000013                M PAGESEL_DROP += 1
+                          M     endif
+                          M ;    EXPAND_RESTORE; NOEXPAND
+                          M ; messg here3 @3776
+                          M     EMIT goto _8085prep_only; PROGDCL 0x2000 | (dest); call dest
+02BB   2ACF               M     goto _8085prep_only
+  000002CF                M PAGE_TRACKER = _8085prep_only;
+                          M ; messg here4 @3779
+                          M ;    NOEXPAND
+                          M ;not needed: fall-thru would be handled by earlier code    DROP_CONTEXT; BSR and WREG unknown here if dest falls through
+                          M ;    EXPAND_POP
+02BA                      M     ORG ctx_addr_73
+02BC                      M     ORG ctx_addr_74
+02BE   0098               M     movwf LATA
+                          M     withbit_7 bcf BITVARS
+02C0   13F0               M     bcf BITVARS, 7
+02C1   0198               M     clrf LATA
+02C2   2AC3               M     goto $+1
+02C4   2AC5               M     goto $+1
+02C7   0098               M     movwf LATA
+                          M     withdest_1 decfsz pxcount
+02C8   0BA0               M     decfsz pxcount, F;
+                          M     withdest_1 incf pxcount0hi
+02C9   0AA1               M     incf pxcount0hi, F;
+02CA   0198               M     clrf LATA
+02CB   0000               M     nop
+                          M     withdest_1 decfsz pxcount0hi
+02CC   0BA1               M     decfsz pxcount0hi, F;
+02CE   2ACF               M     goto _8085noprep
+                      00396     WAIT 1 sec
+02CF   014E               M     banksel PIR0
+02D1   2AD0               M     goto $-1
+02D0                      M     ORG ctx_addr_75
+02D2                      M     ORG ctx_addr_76
                           M     withbit_5 bcf PIR0
-012A   128C               M     bcf PIR0, 5
-                      00342     CALL ws_fillbg;
-012B   20B1               M     call ws_fillbg
-                      00343 ;    setbit LATA, LEDOUT, FALSE;
-                      00344 ;    MOVLW BLUE_PALINX;
-                      00345 ;    CALL setbg_frompalette; doing this while idle < wait
-                      00346     setbg_fromrgb LITERAL(0x000002); ; dim blue
-012C   0140               M     banksel bgcolor + _2943bit
-012D   01CF               M     clrf bgcolor + _2943bit
-012E   01CE               M     clrf bgcolor + _2943bit
-012F   01CD               M     clrf bgcolor + _2943bit
-0130   01CC               M     clrf bgcolor + _2943bit
-0131   01CB               M     clrf bgcolor + _2943bit
-0132   01CA               M     clrf bgcolor + _2943bit
-0133   01C9               M     clrf bgcolor + _2943bit
-0134   01C8               M     clrf bgcolor + _2943bit
-0135   01C7               M     clrf bgcolor + _2943bit
-0136   01C6               M     clrf bgcolor + _2943bit
-0137   01C5               M     clrf bgcolor + _2943bit
-0138   01C4               M     clrf bgcolor + _2943bit
-0139   01C3               M     clrf bgcolor + _2943bit
-013A   01C2               M     clrf bgcolor + _2943bit
-013B   01C1               M     clrf bgcolor + _2943bit
-013C   01C0               M     clrf bgcolor + _2943bit
-013D   01BF               M     clrf bgcolor + _2943bit
-013E   01BE               M     clrf bgcolor + _2943bit
-013F   01BD               M     clrf bgcolor + _2943bit
-0140   01BC               M     clrf bgcolor + _2943bit
-0141   01BB               M     clrf bgcolor + _2943bit
-0142   01BA               M     clrf bgcolor + _2943bit
-0143   30FF               M     movlw (((ASM_MSB | (((((ASM_MSB | (0x000002))) & (1 << (_2943bit))) != 0) * 0xFF))) & ~ASM_MSB)
-0144   00B9               M     movwf bgcolor + _2943bit
-                      00347     WAIT 1 sec
-0145   014E               M     banksel PIR0
-0147   2946               M     goto $-1
-0146                      M     ORG ctx_addr_12
-0148                      M     ORG ctx_addr_13
+02D2   128C               M     bcf PIR0, 5
+                      00397 ;    MOVLW BLUE_PALINX;
+                      00398     ws8_sendpx LITERAL(0x000002), LITERAL(1);;
+                          M     goto_pagesafe _8328prep_only
+                          M ;    EXPAND_PUSH FALSE
+                          M ; messg here1 @3763
+                          M     ERRIF(LITPAGEOF(_8328prep_only), [ERROR] "dest" _8328prep_only 753 !on page 0: 0    @3764)
+                          M     WARNIF(1031    && !753,      [WARNING] jump to 0 @3765);;
+                          M ; messg here2 @3766
+                          M ;PAGESEL_DROP += 1
+                          M ;    messg goto dest, page tracker #v(PAGE_TRACKER), need page sel? #v(LITPAGEOF(dest)) != #v(LITPAGEOF(PAGE_TRACKER))? #v(LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER))
+                          M     if LITPAGEOF(_8328prep_only) != LITPAGEOF(PAGE_TRACKER)
+                          M         EMIT CLRF PCLATH; PAGESEL dest; kludge: mpasm doesn't want to pagesel
+                          M PAGESEL_KEEP += 1
+                          M     else
+  00000015                M PAGESEL_DROP += 1
+                          M     endif
+                          M ;    EXPAND_RESTORE; NOEXPAND
+                          M ; messg here3 @3776
+                          M     EMIT goto _8328prep_only; PROGDCL 0x2000 | (dest); call dest
+02D4   2AF1               M     goto _8328prep_only
+  000002F1                M PAGE_TRACKER = _8328prep_only;
+                          M ; messg here4 @3779
+                          M ;    NOEXPAND
+                          M ;not needed: fall-thru would be handled by earlier code    DROP_CONTEXT; BSR and WREG unknown here if dest falls through
+                          M ;    EXPAND_POP
+02D3                      M     ORG ctx_addr_77
+02D5                      M     ORG ctx_addr_78
+02D7   0140               M     banksel LATA
+02D8   0098               M     movwf LATA
+                          M     withbit_7 bcf BITVARS
+02DA   13F0               M     bcf BITVARS, 7
+02DB   0198               M     clrf LATA
+02DC   3002               M     movlw ((((ASM_MSB | ((((ASM_MSB | (0x000002))) >> (8 * (0))) & 0xFF)))) & ~ASM_MSB)
+02DD   00BA               M     movwf (((rgb_next) + (0)))
+02DE   01BB               M     clrf (((rgb_next) + (1)))
+02E1   0098               M     movwf LATA
+02E2   01BC               M     clrf (((rgb_next) + (2)))
+02E3   0198               M     clrf LATA
+02E4   2AE5               M     goto $+1
+02E6   2AE7               M     goto $+1
+02E9   0098               M     movwf LATA
+                          M     withdest_1 decfsz pxcount
+02EA   0BA0               M     decfsz pxcount, F;
+                          M     withdest_1 incf pxcount0hi
+02EB   0AA1               M     incf pxcount0hi, F;
+02EC   0198               M     clrf LATA
+02ED   0000               M     nop
+                          M     withdest_1 decfsz pxcount0hi
+02EE   0BA1               M     decfsz pxcount0hi, F;
+02F0   2B11               M     goto _8328noprep
+02F1   3001               M     movlw (((ASM_MSB | (_8623SRC & 0xFF))) & ~ASM_MSB)
+02F2   0140               M     banksel pxcount
+02F3   00A0               M     movwf pxcount
+02F4   01A1               M     clrf pxcount0hi
+02F5   01A2               M     clrf pxbuf0 + 23 - _8328bitnum
+02F6   01A3               M     clrf pxbuf0 + 23 - _8328bitnum
+02F7   01A4               M     clrf pxbuf0 + 23 - _8328bitnum
+02F8   01A5               M     clrf pxbuf0 + 23 - _8328bitnum
+02F9   01A6               M     clrf pxbuf0 + 23 - _8328bitnum
+02FA   01A7               M     clrf pxbuf0 + 23 - _8328bitnum
+02FB   01A8               M     clrf pxbuf0 + 23 - _8328bitnum
+02FC   01A9               M     clrf pxbuf0 + 23 - _8328bitnum
+02FD   01AA               M     clrf pxbuf0 + 23 - _8328bitnum
+02FE   01AB               M     clrf pxbuf0 + 23 - _8328bitnum
+02FF   01AC               M     clrf pxbuf0 + 23 - _8328bitnum
+0300   01AD               M     clrf pxbuf0 + 23 - _8328bitnum
+0301   01AE               M     clrf pxbuf0 + 23 - _8328bitnum
+0302   01AF               M     clrf pxbuf0 + 23 - _8328bitnum
+0303   01B0               M     clrf pxbuf0 + 23 - _8328bitnum
+0304   01B1               M     clrf pxbuf0 + 23 - _8328bitnum
+0305   01B2               M     clrf pxbuf0 + 23 - _8328bitnum
+0306   01B3               M     clrf pxbuf0 + 23 - _8328bitnum
+0307   01B4               M     clrf pxbuf0 + 23 - _8328bitnum
+0308   01B5               M     clrf pxbuf0 + 23 - _8328bitnum
+0309   01B6               M     clrf pxbuf0 + 23 - _8328bitnum
+030A   01B7               M     clrf pxbuf0 + 23 - _8328bitnum
+030B   30FF               M     movlw (((ASM_MSB | (((((ASM_MSB | (0x000002))) & (1 << (_8328bitnum))) != 0) * 0xFF))) & ~ASM_MSB)
+030C   00B8               M     movwf pxbuf0 + 23 - _8328bitnum
+030D   303A               M     movlw (((ASM_MSB | (_8994SRC & 0xFF))) & ~ASM_MSB)
+030E   0084               M     movwf FSR0
+030F   0185               M     clrf FSR00hi
+                          M     withbit_7 bsf BITVARS
+0310   17F0               M     bsf BITVARS, 7
+                      00399     ws8_sendpx LITERAL(0x010001), LITERAL(1);;
+                          M     goto_pagesafe _9051prep_only
+                          M ;    EXPAND_PUSH FALSE
+                          M ; messg here1 @3763
+                          M     ERRIF(LITPAGEOF(_9051prep_only), [ERROR] "dest" _9051prep_only 814 !on page 0: 0    @3764)
+                          M     WARNIF(1031    && !814,      [WARNING] jump to 0 @3765);;
+                          M ; messg here2 @3766
+                          M ;PAGESEL_DROP += 1
+                          M ;    messg goto dest, page tracker #v(PAGE_TRACKER), need page sel? #v(LITPAGEOF(dest)) != #v(LITPAGEOF(PAGE_TRACKER))? #v(LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER))
+                          M     if LITPAGEOF(_9051prep_only) != LITPAGEOF(PAGE_TRACKER)
+                          M         EMIT CLRF PCLATH; PAGESEL dest; kludge: mpasm doesn't want to pagesel
+                          M PAGESEL_KEEP += 1
+                          M     else
+  00000017                M PAGESEL_DROP += 1
+                          M     endif
+                          M ;    EXPAND_RESTORE; NOEXPAND
+                          M ; messg here3 @3776
+                          M     EMIT goto _9051prep_only; PROGDCL 0x2000 | (dest); call dest
+0312   2B2E               M     goto _9051prep_only
+  0000032E                M PAGE_TRACKER = _9051prep_only;
+                          M ; messg here4 @3779
+                          M ;    NOEXPAND
+                          M ;not needed: fall-thru would be handled by earlier code    DROP_CONTEXT; BSR and WREG unknown here if dest falls through
+                          M ;    EXPAND_POP
+0311                      M     ORG ctx_addr_79
+0313                      M     ORG ctx_addr_80
+0315   0098               M     movwf LATA
+                          M     withbit_7 bcf BITVARS
+0317   13F0               M     bcf BITVARS, 7
+0318   0198               M     clrf LATA
+0319   3001               M     movlw ((((ASM_MSB | ((((ASM_MSB | (0x010001))) >> (8 * (0))) & 0xFF)))) & ~ASM_MSB)
+031A   00BA               M     movwf (((rgb_next) + (0)))
+031B   01BB               M     clrf (((rgb_next) + (1)))
+031E   0098               M     movwf LATA
+031F   00BC               M     movwf (((rgb_next) + (2)))
+0320   0198               M     clrf LATA
+0321   2B22               M     goto $+1
+0323   2B24               M     goto $+1
+0326   0098               M     movwf LATA
+                          M     withdest_1 decfsz pxcount
+0327   0BA0               M     decfsz pxcount, F;
+                          M     withdest_1 incf pxcount0hi
+0328   0AA1               M     incf pxcount0hi, F;
+0329   0198               M     clrf LATA
+032A   0000               M     nop
+                          M     withdest_1 decfsz pxcount0hi
+032B   0BA1               M     decfsz pxcount0hi, F;
+032D   2B4E               M     goto _9051noprep
+032E   3001               M     movlw (((ASM_MSB | (_9341SRC & 0xFF))) & ~ASM_MSB)
+032F   0140               M     banksel pxcount
+0330   00A0               M     movwf pxcount
+0331   01A1               M     clrf pxcount0hi
+0332   01A2               M     clrf pxbuf0 + 23 - _9051bitnum
+0333   01A3               M     clrf pxbuf0 + 23 - _9051bitnum
+0334   01A4               M     clrf pxbuf0 + 23 - _9051bitnum
+0335   01A5               M     clrf pxbuf0 + 23 - _9051bitnum
+0336   01A6               M     clrf pxbuf0 + 23 - _9051bitnum
+0337   01A7               M     clrf pxbuf0 + 23 - _9051bitnum
+0338   01A8               M     clrf pxbuf0 + 23 - _9051bitnum
+0339   30FF               M     movlw (((ASM_MSB | (((((ASM_MSB | (0x010001))) & (1 << (_9051bitnum))) != 0) * 0xFF))) & ~ASM_MSB)
+033A   00A9               M     movwf pxbuf0 + 23 - _9051bitnum
+033B   01AA               M     clrf pxbuf0 + 23 - _9051bitnum
+033C   01AB               M     clrf pxbuf0 + 23 - _9051bitnum
+033D   01AC               M     clrf pxbuf0 + 23 - _9051bitnum
+033E   01AD               M     clrf pxbuf0 + 23 - _9051bitnum
+033F   01AE               M     clrf pxbuf0 + 23 - _9051bitnum
+0340   01AF               M     clrf pxbuf0 + 23 - _9051bitnum
+0341   01B0               M     clrf pxbuf0 + 23 - _9051bitnum
+0342   01B1               M     clrf pxbuf0 + 23 - _9051bitnum
+0343   01B2               M     clrf pxbuf0 + 23 - _9051bitnum
+0344   01B3               M     clrf pxbuf0 + 23 - _9051bitnum
+0345   01B4               M     clrf pxbuf0 + 23 - _9051bitnum
+0346   01B5               M     clrf pxbuf0 + 23 - _9051bitnum
+0347   01B6               M     clrf pxbuf0 + 23 - _9051bitnum
+0348   01B7               M     clrf pxbuf0 + 23 - _9051bitnum
+0349   01B8               M     clrf pxbuf0 + 23 - _9051bitnum
+034A   303A               M     movlw (((ASM_MSB | (_9712SRC & 0xFF))) & ~ASM_MSB)
+034B   0084               M     movwf FSR0
+034C   0185               M     clrf FSR00hi
+                          M     withbit_7 bsf BITVARS
+034D   17F0               M     bsf BITVARS, 7
+                      00400     ws8_sendpx LITERAL(0x010001), LITERAL(UNIV_LEN-2);;
+                          M     goto_pagesafe _9769prep_only
+                          M ;    EXPAND_PUSH FALSE
+                          M ; messg here1 @3763
+                          M     ERRIF(LITPAGEOF(_9769prep_only), [ERROR] "dest" _9769prep_only 875 !on page 0: 0    @3764)
+                          M     WARNIF(1031    && !875,      [WARNING] jump to 0 @3765);;
+                          M ; messg here2 @3766
+                          M ;PAGESEL_DROP += 1
+                          M ;    messg goto dest, page tracker #v(PAGE_TRACKER), need page sel? #v(LITPAGEOF(dest)) != #v(LITPAGEOF(PAGE_TRACKER))? #v(LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER))
+                          M     if LITPAGEOF(_9769prep_only) != LITPAGEOF(PAGE_TRACKER)
+                          M         EMIT CLRF PCLATH; PAGESEL dest; kludge: mpasm doesn't want to pagesel
+                          M PAGESEL_KEEP += 1
+                          M     else
+  00000019                M PAGESEL_DROP += 1
+                          M     endif
+                          M ;    EXPAND_RESTORE; NOEXPAND
+                          M ; messg here3 @3776
+                          M     EMIT goto _9769prep_only; PROGDCL 0x2000 | (dest); call dest
+034F   2B6B               M     goto _9769prep_only
+  0000036B                M PAGE_TRACKER = _9769prep_only;
+                          M ; messg here4 @3779
+                          M ;    NOEXPAND
+                          M ;not needed: fall-thru would be handled by earlier code    DROP_CONTEXT; BSR and WREG unknown here if dest falls through
+                          M ;    EXPAND_POP
+034E                      M     ORG ctx_addr_81
+0350                      M     ORG ctx_addr_82
+0352   0098               M     movwf LATA
+                          M     withbit_7 bcf BITVARS
+0354   13F0               M     bcf BITVARS, 7
+0355   0198               M     clrf LATA
+0356   3001               M     movlw ((((ASM_MSB | ((((ASM_MSB | (0x010001))) >> (8 * (0))) & 0xFF)))) & ~ASM_MSB)
+0357   00BA               M     movwf (((rgb_next) + (0)))
+0358   01BB               M     clrf (((rgb_next) + (1)))
+035B   0098               M     movwf LATA
+035C   00BC               M     movwf (((rgb_next) + (2)))
+035D   0198               M     clrf LATA
+035E   2B5F               M     goto $+1
+0360   2B61               M     goto $+1
+0363   0098               M     movwf LATA
+                          M     withdest_1 decfsz pxcount
+0364   0BA0               M     decfsz pxcount, F;
+                          M     withdest_1 incf pxcount0hi
+0365   0AA1               M     incf pxcount0hi, F;
+0366   0198               M     clrf LATA
+0367   0000               M     nop
+                          M     withdest_1 decfsz pxcount0hi
+0368   0BA1               M     decfsz pxcount0hi, F;
+036A   2B8C               M     goto _9769noprep
+036B   303E               M     movlw (((ASM_MSB | (_10059SRC & 0xFF))) & ~ASM_MSB)
+036C   0140               M     banksel pxcount
+036D   00A0               M     movwf pxcount
+036E   3006               M     movlw (((ASM_MSB | (_10059SRC >> 8 & 0xFF))) & ~ASM_MSB)
+036F   00A1               M     movwf pxcount0hi
+0370   01A2               M     clrf pxbuf0 + 23 - _9769bitnum
+0371   01A3               M     clrf pxbuf0 + 23 - _9769bitnum
+0372   01A4               M     clrf pxbuf0 + 23 - _9769bitnum
+0373   01A5               M     clrf pxbuf0 + 23 - _9769bitnum
+0374   01A6               M     clrf pxbuf0 + 23 - _9769bitnum
+0375   01A7               M     clrf pxbuf0 + 23 - _9769bitnum
+0376   01A8               M     clrf pxbuf0 + 23 - _9769bitnum
+0377   30FF               M     movlw (((ASM_MSB | (((((ASM_MSB | (0x010001))) & (1 << (_9769bitnum))) != 0) * 0xFF))) & ~ASM_MSB)
+0378   00A9               M     movwf pxbuf0 + 23 - _9769bitnum
+0379   01AA               M     clrf pxbuf0 + 23 - _9769bitnum
+037A   01AB               M     clrf pxbuf0 + 23 - _9769bitnum
+037B   01AC               M     clrf pxbuf0 + 23 - _9769bitnum
+037C   01AD               M     clrf pxbuf0 + 23 - _9769bitnum
+037D   01AE               M     clrf pxbuf0 + 23 - _9769bitnum
+037E   01AF               M     clrf pxbuf0 + 23 - _9769bitnum
+037F   01B0               M     clrf pxbuf0 + 23 - _9769bitnum
+0380   01B1               M     clrf pxbuf0 + 23 - _9769bitnum
+0381   01B2               M     clrf pxbuf0 + 23 - _9769bitnum
+0382   01B3               M     clrf pxbuf0 + 23 - _9769bitnum
+0383   01B4               M     clrf pxbuf0 + 23 - _9769bitnum
+0384   01B5               M     clrf pxbuf0 + 23 - _9769bitnum
+0385   01B6               M     clrf pxbuf0 + 23 - _9769bitnum
+0386   01B7               M     clrf pxbuf0 + 23 - _9769bitnum
+0387   01B8               M     clrf pxbuf0 + 23 - _9769bitnum
+0388   303A               M     movlw (((ASM_MSB | (_10437SRC & 0xFF))) & ~ASM_MSB)
+0389   0084               M     movwf FSR0
+038A   0185               M     clrf FSR00hi
+                          M     withbit_7 bsf BITVARS
+038B   17F0               M     bsf BITVARS, 7
+                      00401     ws8_sendpx 0, LITERAL(0); ; flush
+                          M     goto_pagesafe _10494prep_only
+                          M ;    EXPAND_PUSH FALSE
+                          M ; messg here1 @3763
+                          M     ERRIF(LITPAGEOF(_10494prep_only), [ERROR] "dest" _10494prep_only 929 !on page 0: 0  @3764)
+                          M     WARNIF(1031    && !929,      [WARNING] jump to 0 @3765);;
+                          M ; messg here2 @3766
+                          M ;PAGESEL_DROP += 1
+                          M ;    messg goto dest, page tracker #v(PAGE_TRACKER), need page sel? #v(LITPAGEOF(dest)) != #v(LITPAGEOF(PAGE_TRACKER))? #v(LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER))
+                          M     if LITPAGEOF(_10494prep_only) != LITPAGEOF(PAGE_TRACKER)
+                          M         EMIT CLRF PCLATH; PAGESEL dest; kludge: mpasm doesn't want to pagesel
+                          M PAGESEL_KEEP += 1
+                          M     else
+  0000001B                M PAGESEL_DROP += 1
+                          M     endif
+                          M ;    EXPAND_RESTORE; NOEXPAND
+                          M ; messg here3 @3776
+                          M     EMIT goto _10494prep_only; PROGDCL 0x2000 | (dest); call dest
+038D   2BA1               M     goto _10494prep_only
+  000003A1                M PAGE_TRACKER = _10494prep_only;
+                          M ; messg here4 @3779
+                          M ;    NOEXPAND
+                          M ;not needed: fall-thru would be handled by earlier code    DROP_CONTEXT; BSR and WREG unknown here if dest falls through
+                          M ;    EXPAND_POP
+038C                      M     ORG ctx_addr_83
+038E                      M     ORG ctx_addr_84
+0390   0098               M     movwf LATA
+                          M     withbit_7 bcf BITVARS
+0392   13F0               M     bcf BITVARS, 7
+0393   0198               M     clrf LATA
+0394   2B95               M     goto $+1
+0396   2B97               M     goto $+1
+0399   0098               M     movwf LATA
+                          M     withdest_1 decfsz pxcount
+039A   0BA0               M     decfsz pxcount, F;
+                          M     withdest_1 incf pxcount0hi
+039B   0AA1               M     incf pxcount0hi, F;
+039C   0198               M     clrf LATA
+039D   0000               M     nop
+                          M     withdest_1 decfsz pxcount0hi
+039E   0BA1               M     decfsz pxcount0hi, F;
+03A0   2BA1               M     goto _10494noprep
+                      00402     WAIT 1 sec
+03A1   014E               M     banksel PIR0
+03A3   2BA2               M     goto $-1
+03A2                      M     ORG ctx_addr_85
+03A4                      M     ORG ctx_addr_86
                           M     withbit_5 bcf PIR0
-0148   128C               M     bcf PIR0, 5
-                      00348     CALL ws_fillbg;
-0149   20B1               M     call ws_fillbg
-                      00349 ;    setbit LATA, LEDOUT, TRUE;
-                      00350 ;    MOVLW OFF_PALINX;
-                      00351 ;    CALL setbg_frompalette; doing this while idle < wait
-                      00352     setbg_fromrgb LITERAL(0); ; off
-014A   0140               M     banksel bgcolor + _3337bit
-014B   01CF               M     clrf bgcolor + _3337bit
-014C   01CE               M     clrf bgcolor + _3337bit
-014D   01CD               M     clrf bgcolor + _3337bit
-014E   01CC               M     clrf bgcolor + _3337bit
-014F   01CB               M     clrf bgcolor + _3337bit
-0150   01CA               M     clrf bgcolor + _3337bit
-0151   01C9               M     clrf bgcolor + _3337bit
-0152   01C8               M     clrf bgcolor + _3337bit
-0153   01C7               M     clrf bgcolor + _3337bit
-0154   01C6               M     clrf bgcolor + _3337bit
-0155   01C5               M     clrf bgcolor + _3337bit
-0156   01C4               M     clrf bgcolor + _3337bit
-0157   01C3               M     clrf bgcolor + _3337bit
-0158   01C2               M     clrf bgcolor + _3337bit
-0159   01C1               M     clrf bgcolor + _3337bit
-015A   01C0               M     clrf bgcolor + _3337bit
-015B   01BF               M     clrf bgcolor + _3337bit
-015C   01BE               M     clrf bgcolor + _3337bit
-015D   01BD               M     clrf bgcolor + _3337bit
-015E   01BC               M     clrf bgcolor + _3337bit
-015F   01BB               M     clrf bgcolor + _3337bit
-0160   01BA               M     clrf bgcolor + _3337bit
-0161   01B9               M     clrf bgcolor + _3337bit
-                      00353     WAIT 1 sec
-0162   014E               M     banksel PIR0
-0164   2963               M     goto $-1
-0163                      M     ORG ctx_addr_14
-0165                      M     ORG ctx_addr_15
+03A4   128C               M     bcf PIR0, 5
+                      00403 ;    MOVLW OFF_PALINX;
+                      00404     ws8_sendpx LITERAL(0), LITERAL(UNIV_LEN);;
+                          M     goto_pagesafe _10737prep_only
+                          M ;    EXPAND_PUSH FALSE
+                          M ; messg here1 @3763
+                          M     ERRIF(LITPAGEOF(_10737prep_only), [ERROR] "dest" _10737prep_only 973 !on page 0: 0  @3764)
+                          M     WARNIF(1031    && !973,      [WARNING] jump to 0 @3765);;
+                          M ; messg here2 @3766
+                          M ;PAGESEL_DROP += 1
+                          M ;    messg goto dest, page tracker #v(PAGE_TRACKER), need page sel? #v(LITPAGEOF(dest)) != #v(LITPAGEOF(PAGE_TRACKER))? #v(LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER))
+                          M     if LITPAGEOF(_10737prep_only) != LITPAGEOF(PAGE_TRACKER)
+                          M         EMIT CLRF PCLATH; PAGESEL dest; kludge: mpasm doesn't want to pagesel
+                          M PAGESEL_KEEP += 1
+                          M     else
+  0000001D                M PAGESEL_DROP += 1
+                          M     endif
+                          M ;    EXPAND_RESTORE; NOEXPAND
+                          M ; messg here3 @3776
+                          M     EMIT goto _10737prep_only; PROGDCL 0x2000 | (dest); call dest
+03A6   2BCD               M     goto _10737prep_only
+  000003CD                M PAGE_TRACKER = _10737prep_only;
+                          M ; messg here4 @3779
+                          M ;    NOEXPAND
+                          M ;not needed: fall-thru would be handled by earlier code    DROP_CONTEXT; BSR and WREG unknown here if dest falls through
+                          M ;    EXPAND_POP
+03A5                      M     ORG ctx_addr_87
+03A7                      M     ORG ctx_addr_88
+03A9   0140               M     banksel LATA
+03AA   0098               M     movwf LATA
+                          M     withbit_7 bcf BITVARS
+03AC   13F0               M     bcf BITVARS, 7
+03AD   0198               M     clrf LATA
+03AE   01BA               M     clrf (((rgb_next) + (0)))
+03B1   0098               M     movwf LATA
+03B2   2BB3               M     goto $+1
+03B3   0198               M     clrf LATA
+03B4   01BB               M     clrf (((rgb_next) + (1)))
+03B7   0098               M     movwf LATA
+03B8   2BB9               M     goto $+1
+03B9   0198               M     clrf LATA
+03BA   01BC               M     clrf (((rgb_next) + (2)))
+03BD   0098               M     movwf LATA
+03BE   2BBF               M     goto $+1
+03BF   0198               M     clrf LATA
+03C0   2BC1               M     goto $+1
+03C2   2BC3               M     goto $+1
+03C5   0098               M     movwf LATA
+                          M     withdest_1 decfsz pxcount
+03C6   0BA0               M     decfsz pxcount, F;
+                          M     withdest_1 incf pxcount0hi
+03C7   0AA1               M     incf pxcount0hi, F;
+03C8   0198               M     clrf LATA
+03C9   0000               M     nop
+                          M     withdest_1 decfsz pxcount0hi
+03CA   0BA1               M     decfsz pxcount0hi, F;
+03CC   2BED               M     goto _10737noprep
+03CD   3040               M     movlw (((ASM_MSB | (_11116SRC & 0xFF))) & ~ASM_MSB)
+03CE   0140               M     banksel pxcount
+03CF   00A0               M     movwf pxcount
+03D0   3006               M     movlw (((ASM_MSB | (_11116SRC >> 8 & 0xFF))) & ~ASM_MSB)
+03D1   00A1               M     movwf pxcount0hi
+03D2   01A2               M     clrf pxbuf0 + 23 - _10737bitnum
+03D3   01A3               M     clrf pxbuf0 + 23 - _10737bitnum
+03D4   01A4               M     clrf pxbuf0 + 23 - _10737bitnum
+03D5   01A5               M     clrf pxbuf0 + 23 - _10737bitnum
+03D6   01A6               M     clrf pxbuf0 + 23 - _10737bitnum
+03D7   01A7               M     clrf pxbuf0 + 23 - _10737bitnum
+03D8   01A8               M     clrf pxbuf0 + 23 - _10737bitnum
+03D9   01A9               M     clrf pxbuf0 + 23 - _10737bitnum
+03DA   01AA               M     clrf pxbuf0 + 23 - _10737bitnum
+03DB   01AB               M     clrf pxbuf0 + 23 - _10737bitnum
+03DC   01AC               M     clrf pxbuf0 + 23 - _10737bitnum
+03DD   01AD               M     clrf pxbuf0 + 23 - _10737bitnum
+03DE   01AE               M     clrf pxbuf0 + 23 - _10737bitnum
+03DF   01AF               M     clrf pxbuf0 + 23 - _10737bitnum
+03E0   01B0               M     clrf pxbuf0 + 23 - _10737bitnum
+03E1   01B1               M     clrf pxbuf0 + 23 - _10737bitnum
+03E2   01B2               M     clrf pxbuf0 + 23 - _10737bitnum
+03E3   01B3               M     clrf pxbuf0 + 23 - _10737bitnum
+03E4   01B4               M     clrf pxbuf0 + 23 - _10737bitnum
+03E5   01B5               M     clrf pxbuf0 + 23 - _10737bitnum
+03E6   01B6               M     clrf pxbuf0 + 23 - _10737bitnum
+03E7   01B7               M     clrf pxbuf0 + 23 - _10737bitnum
+03E8   01B8               M     clrf pxbuf0 + 23 - _10737bitnum
+03E9   303A               M     movlw (((ASM_MSB | (_11487SRC & 0xFF))) & ~ASM_MSB)
+03EA   0084               M     movwf FSR0
+03EB   0185               M     clrf FSR00hi
+                          M     withbit_7 bsf BITVARS
+03EC   17F0               M     bsf BITVARS, 7
+                      00405     ws8_sendpx 0, LITERAL(0); ; flush
+                          M     goto_pagesafe _11544prep_only
+                          M ;    EXPAND_PUSH FALSE
+                          M ; messg here1 @3763
+                          M     ERRIF(LITPAGEOF(_11544prep_only), [ERROR] "dest" _11544prep_only 1026 !on page 0: 0 @3764)
+                          M     WARNIF(1031    && !1026,     [WARNING] jump to 0 @3765);;
+                          M ; messg here2 @3766
+                          M ;PAGESEL_DROP += 1
+                          M ;    messg goto dest, page tracker #v(PAGE_TRACKER), need page sel? #v(LITPAGEOF(dest)) != #v(LITPAGEOF(PAGE_TRACKER))? #v(LITPAGEOF(dest) != LITPAGEOF(PAGE_TRACKER))
+                          M     if LITPAGEOF(_11544prep_only) != LITPAGEOF(PAGE_TRACKER)
+                          M         EMIT CLRF PCLATH; PAGESEL dest; kludge: mpasm doesn't want to pagesel
+                          M PAGESEL_KEEP += 1
+                          M     else
+  0000001F                M PAGESEL_DROP += 1
+                          M     endif
+                          M ;    EXPAND_RESTORE; NOEXPAND
+                          M ; messg here3 @3776
+                          M     EMIT goto _11544prep_only; PROGDCL 0x2000 | (dest); call dest
+03EE   2C02               M     goto _11544prep_only
+  00000402                M PAGE_TRACKER = _11544prep_only;
+                          M ; messg here4 @3779
+                          M ;    NOEXPAND
+                          M ;not needed: fall-thru would be handled by earlier code    DROP_CONTEXT; BSR and WREG unknown here if dest falls through
+                          M ;    EXPAND_POP
+03ED                      M     ORG ctx_addr_89
+03EF                      M     ORG ctx_addr_90
+03F1   0098               M     movwf LATA
+                          M     withbit_7 bcf BITVARS
+03F3   13F0               M     bcf BITVARS, 7
+03F4   0198               M     clrf LATA
+03F5   2BF6               M     goto $+1
+03F7   2BF8               M     goto $+1
+03FA   0098               M     movwf LATA
+                          M     withdest_1 decfsz pxcount
+03FB   0BA0               M     decfsz pxcount, F;
+                          M     withdest_1 incf pxcount0hi
+03FC   0AA1               M     incf pxcount0hi, F;
+03FD   0198               M     clrf LATA
+03FE   0000               M     nop
+                          M     withdest_1 decfsz pxcount0hi
+03FF   0BA1               M     decfsz pxcount0hi, F;
+0401   2C02               M     goto _11544noprep
+                      00406     WAIT 1 sec
+0402   014E               M     banksel PIR0
+0404   2C03               M     goto $-1
+0403                      M     ORG ctx_addr_91
+0405                      M     ORG ctx_addr_92
                           M     withbit_5 bcf PIR0
-0165   128C               M     bcf PIR0, 5
-                      00354     CALL ws_fillbg;
-0166   20B1               M     call ws_fillbg
-                      00355 ;    setbit LATA, LEDOUT, FALSE;
-                      00356     GOTO play_loop
-0167   28F0               M     goto play_loop
-                      00357     THREAD_END;
-                      00358 
+0405   128C               M     bcf PIR0, 5
+                      00407     GOTO play_loop
+0406   2903               M     goto play_loop
+                      00408     THREAD_END;
+                      00409 
 Message[301]: MESSAGE: (end of hoist 4 @216)
-Message[301]: MESSAGE: (epilog @4432)
-00E0                      M     ORG ctx_addr_5
-00E0   2968               M     goto init_3
-0168                      M     ORG ctx_addr_16
-0168                      M init_3:
-0168                      M at_eof_0:
-0168                      M at_eof_1:
-0168                      M at_eof_2:
-Message[301]: MESSAGE: ([INFO] optimization stats: @4420)
-0168                      M at_eof_3:
-Message[301]: MESSAGE: ([INFO] bank sel: 18 (10%), dropped: 156 (90%) @2569)
-0168                      M at_eof_4:
-Message[301]: MESSAGE: ([INFO] bank0 used: 48/80 (60%) @2746)
+Message[301]: MESSAGE: (epilog @5397)
+00F3                      M     ORG ctx_addr_54
+00F3   2C07               M     goto init_4
+0407                      M     ORG ctx_addr_93
+0407                      M init_4:
+0407                      M at_eof_0:
+0407                      M at_eof_1:
+0407                      M at_eof_2:
+Message[301]: MESSAGE: ([INFO] optimization stats: @5385)
+0407                      M at_eof_3:
+Message[301]: MESSAGE: ([INFO] bank sel: 27 (4%), dropped: 584 (96%) @2569)
+0407                      M at_eof_4:
+Message[301]: MESSAGE: ([INFO] bank0 used: 29/80 (36%) @2746)
 Message[301]: MESSAGE: ([INFO] non-banked used: 2/16 (13%) @2752)
-0168                      M at_eof_5:
-Message[301]: MESSAGE: ([INFO] page sel: 1 (9%), dropped: 10 (91%) @3788)
-Message[301]: MESSAGE: ([INFO] page0 used: 360/2048 (18%) @3790)
-0168                      M at_eof_6:
-0168                      M at_eof_7:
+0407                      M at_eof_5:
+Message[301]: MESSAGE: ([INFO] page sel: 1 (3%), dropped: 34 (97%) @3788)
+Message[301]: MESSAGE: ([INFO] page0 used: 1031/2048 (50%) @3790)
+0407                      M at_eof_6:
+0407                      M at_eof_7:
 Message[301]: MESSAGE: ([INFO] #threads: 1, stack alloc: 4/16 (25%) @2089)
-Message[301]: MESSAGE: ([DEBUG] why is banksel needed here? -1 @2095)
+Message[301]: MESSAGE: ([DEBUG] why is banksel needed here? 1804 @2095)
                           M     withdest_0 movf stkptr_1
-0168   0871               M     movf stkptr_1, W;
-0169   017F               M     banksel STKPTR
-016A   00ED               M     movwf STKPTR
-016B   0008               M     return
-00D7                      M     ORG ctx_addr_4
+0407   0871               M     movf stkptr_1, W;
+0408   017F               M     banksel STKPTR
+0409   00ED               M     movwf STKPTR
+040A   0008               M     return
+00EA                      M     ORG ctx_addr_53
                           M     withdest_0 movf stkptr_1
-00D7   0871               M     movf stkptr_1, W;
-00D8   017F               M     banksel STKPTR
-00D9   00ED               M     movwf STKPTR
-016C                      M     ORG ctx_addr_17
-Message[301]: MESSAGE: (end of epilog @4467)
-MPASM 5.87  /HOME/DJ/MPLABXPROJECTS/WSSPLITT   12-13-2021  0:07:08         PAGE  3
+00EA   0871               M     movf stkptr_1, W;
+00EB   017F               M     banksel STKPTR
+00EC   00ED               M     movwf STKPTR
+040B                      M     ORG ctx_addr_94
+Message[301]: MESSAGE: (end of epilog @5432)
+MPASM 5.87  /HOME/DJ/MPLABXPROJECTS/WSSPLITT   12-13-2021  20:23:54         PAGE  3
 WS281X-Splitter - WS281X segment splitter/breakout/debug for Microchip PIC
 
 SYMBOL TABLE
@@ -778,13 +2327,14 @@ BANKLEN                           0x80
 BANKOF                            IIF(ISBANKED(reg), REG2ADDR(reg) / BANKLEN, BANK_UNKN)
 BANKOFS                           ((reg) % BANKLEN)
 BANKSAFE                          
-BANKSEL_DROP                      0000009C
-BANKSEL_KEEP                      00000014
+BANKSEL_DROP                      00000248
+BANKSEL_KEEP                      0000001D
 BANK_TRACKER                      00001FED
 BANK_UNKN                         -1
 BCF                               bcf_tracker
-BG                                00000000
 BIT                               (1 << (n))
+BITVARS                           00000070
+BITVARS0size                      00000001
 BOOL2INT                          ((val) != 0)
 BORROW                            STATUS, C, !
 BREAKOUT                          RA0
@@ -815,7 +2365,7 @@ EMITL
 ENABLED                           NOBIT(n)
 ENABLED_ALL                       0
 ENDOF                             (name + SIZEOF(name))
-EOF_ADDR                          00000168
+EOF_ADDR                          00000407
 EOF_COUNT                         00000008
 EQUALS0                           STATUS, Z,
 ERRIF                             ERRIF_#v(((assert) != 0))  msg
@@ -826,18 +2376,20 @@ EXPAND_POP                        EXPAND_CTL -1
 EXPAND_PUSH                       EXPAND_CTL
 EXPAND_RESTORE                    EXPAND_CTL 0xf00d
 FALSE                             0
-FG                                00000001
 FOSC_FREQ                         (32 MHz)
 FOUND_MSB                         00000000
 FSR00hi                           00000005
 FSR10hi                           00000007
+FSR_prep                          FSR1
+FSR_send                          FSR0
+GETRGBBYTE_INSTR                  00000001
 GOTO                              goto_pagesafe
 GPR_END                           0x70
 GPR_START                         0x20
+HAS_WSDATA                        00000080
 HIBYTE16                          BYTEOF(val, 1)
 HIBYTE24                          BYTEOF(val, 2)
 HOST_STKLEN                       16-0
-I                                 000000FF
 IGNORE_EOL                        
 IIF                               IIF_#v(((TF) != 0))(tval,  fval)
 IIFDEBUG                          expr_true
@@ -855,18 +2407,20 @@ INDF1_postinc                     00010002
 INDF1_predec                      00010001
 INDF1_preinc                      00010000
 INDF1_special                     00010000
-INIT_COUNT                        00000003
+INDF_send                         INDF0
+INIT_COUNT                        00000004
 IN_THREAD                         00000000
 IORLW                             iorlw_tracker
 ISBANKED                          ((BANKOFS(reg) >= COMMON_END) && (BANKOFS(reg) < GPR_END))
 ISLIT                             ((val) & ASM_MSB)
 ISR_VECTOR                        (RESET_VECTOR + 4)
 KHz                               * 1000
-LAST_INIT                         000000E1
+LAST_INIT                         000000F4
 LATEST_RAM1                       00000071
-LATEST_RAM2                       00000038
-LATEST_RAM3                       00000050
-LATEST_RAM4                       00000072
+LATEST_RAM2                       00000022
+LATEST_RAM3                       0000003A
+LATEST_RAM4                       0000003D
+LATEST_RAM5                       00000072
 LEDOUT                            RA4
 LISTCTL                           
 LIST_POP                          LISTCTL -1
@@ -922,35 +2476,36 @@ MY_CONFIG2                        00002FFE
 MY_CONFIG3                        00003F9F
 MY_CONFIG4                        00001FFF
 MY_CONFIG5                        00003FFF
-NEXT_RAM0                         00000050
+NEEDS_BANKSEL                     (ISBANKED(regto) && (BANKOF(regto) != BANKOF(regfrom)))
+NEXT_RAM0                         0000003D
 NEXT_RAM1                         000000A0
 NEXT_RAM9999                      00000072
 NOBANK                            0000270F
 NOBIT                             0
 NOP                               nop_multi
 NULL_STMT                         ORG $
-NUM_CONTEXT                       00000012
+NUM_CONTEXT                       0000005F
+NUM_SENDPX                        0000000E
 NUM_THREADS                       00000001
-O                                 00000000
 OUTPPS_DT1                        0x10
 OUTPPS_TX1_CK1                    0x0F
-PAGESEL_DROP                      0000000A
+PAGESEL_DROP                      00000022
 PAGESEL_KEEP                      00000001
-PAGE_TRACKER                      000000E1
+PAGE_TRACKER                      000000F4
 PASS1_FIXUPS                      00000000
 PASS2_FIXUPS                      00000000
 PLL                               * 2
 POP                               
 PUSH                              
 PXOUT                             RA0
-RAM_BLOCK                         00000004
+RAM_BLOCK                         00000005
 RAM_LEN0                          00000050
 RAM_LEN1                          00000050
 RAM_LEN9999                       00000010
 RAM_START0                        00000020
 RAM_START1                        000000A0
 RAM_START9999                     00000070
-RAM_USED0                         00000030
+RAM_USED0                         0000001D
 RAM_USED1                         00000000
 RAM_USED9999                      00000002
 REG2ADDR                          (a)
@@ -961,7 +2516,7 @@ REGMID                            name#v(0)mid
 REGPAGEOF                         ((addr) / REG_PAGELEN)
 REG_PAGELEN                       0x100
 REPEAT                            
-REPEATER                          00000006
+REPEATER                          00000000
 RERUN_THREADS                     TRUE
 RESET_VECTOR                      0
 REVBIT                            (0x80 >> (n))
@@ -971,7 +2526,6 @@ SEG1OUT                           RA1
 SEG2OUT                           RA2
 SEG3OUT                           RA#v(3+2)
 SEG4OUT                           RA4
-SEND_COUNT                        000000E5
 SET8W                             IORLW 0xFF
 SETUP_FULL                        00000080
 SETUP_ONLY                        00000010
@@ -1002,7 +2556,6 @@ TRUE                              1
 TUNED                             ((freq) * 10/9)
 UGLY_PASS12FIX                    
 UNIV_LEN                          1600
-UNIV_SCALE                        00000007
 UNTUNED                           ((freq) * 9/10)
 USE_HFFRQ                         b'110'
 WAIT                              
@@ -1039,9 +2592,7 @@ b0DCL                             ALLOC_GPR 0,
 b0DCL16                           
 b0DCL24                           
 bcf_tracker                       
-before_yield                      00000011
-bgcolor                           00000038
-bgcolor0size                      00000018
+before_yield                      0000005E
 bitnum_arg                        withbit_#v(argg)
 bitoff_0                          
 bitoff_1                          
@@ -1064,15 +2615,13 @@ call_pagesafe
 clrf_tracker                      
 clrw                              clrf WREG
 comf2s                            
-count                             00000070
-count0size                        00000001
 decf_banksafe                     
 decfsz_tracker                    
 dest_arg                          withdest_#v(argg)
 divup                             (((num)+(den)-1)/(den))
 doing_init                        
 elapsed_fps                       PIR0, TMR0IF
-eof                               00000168
+eof                               00000407
 eof_0                             
 eof_1                             
 eof_2                             
@@ -1081,13 +2630,14 @@ eof_4
 eof_5                             
 eof_6                             
 eof_7                             
-fgcolor                           00000020
-fgcolor0size                      00000018
-fill_loop                         000000B7
 find_msb                          
 fosc_init                         
 fps_init                          
 generate_brkout_bytes             
+get_rgbbyte                       get_rgbbyte_#v(byteinx) rgb24
+get_rgbbyte_0                     
+get_rgbbyte_1                     
+get_rgbbyte_2                     
 goto_pagesafe                     
 ifbit                             
 ifbit_const                       
@@ -1117,20 +2667,31 @@ nop8                              00000005
 nop_multi                         
 nopif                             
 pct                               rdiv(100 * (num), den)
-play_loop                         000000F0
+play_loop                         00000103
 pmd_init                          
 pps_lock                          
+prep_finish                       
+prep_start                        
 prescaler                         log2((base_freq) / (want_freq))
+pxbuf0                            00000022
+pxbuf00size                       00000018
+pxcount                           00000020
+pxcount0hi                        00000021
+pxcount0size                      00000002
 rdiv                              (((num)+(den)/2)/MAX(den, 1))
 rewindpx                          
+rgb_next                          0000003A
+rgb_next0hi                       0000003C
+rgb_next0mid                      0000003B
+rgb_next0size                     00000003
 scale                             (BIT(prescale) KHz / khz(freq))
 sec                               * 1000000
-setbg_fromrgb                     
 setbit                            
 showarg_0                         
 stkptr_00size                     00000001
 sublw_tracker                     
 swapreg                           
+upd_count_low                     
 usec                              * 1
 val_arg                           showarg_#v(argg)
 wait2xmit                         
@@ -1151,26 +2712,42 @@ withbit_6
 withbit_7                         
 withdest_0                        
 withdest_1                        
-ws8_resendBGpx                    0000009A
-ws8_resendFGpx                    00000083
-ws8_sendBG_23bits                 000000A7
-ws8_sendBGbyte                    00000053
-ws8_sendBGpx                      000000A1
-ws8_sendFG_23bits                 00000090
-ws8_sendFGbyte                    00000023
-ws8_sendFGpx                      0000008A
+ws8_send10bits_using4             0000009C
+ws8_send11bits_using4             00000092
+ws8_send12bits_using4             00000088
+ws8_send13bits_using4             0000007E
+ws8_send14bits_using4             00000074
+ws8_send15bits_using4             0000006A
+ws8_send16bits_using4             00000060
+ws8_send17bits_using4             00000056
+ws8_send18bits_using4             0000004C
+ws8_send19bits_using4             00000042
+ws8_send1bits_using4              000000DE
+ws8_send20bits_using4             0000003C
+ws8_send21bits_using4             00000036
+ws8_send22bits_using4             00000030
+ws8_send23bits_using4             0000002A
+ws8_send24bits_using4             00000024
+ws8_send2bits_using4              000000D8
+ws8_send3bits_using4              000000D2
+ws8_send4bits_using4              000000CC
+ws8_send5bits_using4              000000C6
+ws8_send6bits_using4              000000C0
+ws8_send7bits_using4              000000BA
+ws8_send8bits_using4              000000B0
+ws8_send9bits_using4              000000A6
 ws8_sendbit                       
+ws8_sendpx                        
 ws_breakout_setup                 
 ws_decode                         
 ws_encbyte                        
-ws_fillbg                         000000B1
-ws_player                         000000E1
+ws_player                         000000F4
 ws_send_byte                      
 ws_send_px                        
 xmit_ready                        PIR3, TX1IF, yesno
 xorlw_tracker                     
-yield                             000000D4
-yield_again                       000000D7
+yield                             000000E7
+yield_again                       000000EA
 
 
 MEMORY USAGE MAP ('X' = Used,  '-' = Unused)
@@ -1180,17 +2757,28 @@ MEMORY USAGE MAP ('X' = Used,  '-' = Unused)
 0080 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
 00C0 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
 0100 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
-0140 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXX--- ----------------
+0140 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0180 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+01C0 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0200 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0240 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0280 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+02C0 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0300 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0340 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0380 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+03C0 : XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX XXXXXXXXXXXXXXXX
+0400 : XXXXXXXXXXXX---- ---------------- ---------------- ----------------
 8000 : -------XXXXX---- ---------------- ---------------- ----------------
 
 All other memory blocks unused.
 
-Program Memory Words Used:   370
-Program Memory Words Free:  1678
+Program Memory Words Used:  1041
+Program Memory Words Free:  1007
 
 
 Errors   :     0
 Warnings :     0 reported,     0 suppressed
-Messages :    37 reported,    32 suppressed
+Messages :    36 reported,    32 suppressed
 
 
