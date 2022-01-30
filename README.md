@@ -7,7 +7,7 @@ WS281X-Splitter has 2 main purposes:
 The firmware is written specifically for the Microchip PIC16F15313, but can be adapted to some other PICs.  The firmware uses Timers 0-2, MSSP, PWM, and CLC peripherals.  The CLC allows WS281X signal data to be sent and received at full speed (800 KHz) using a low-power 8 MIPS 8-bit microcontroller.
 
 The hardware is designed to be inlinable with WS281X strips.  For example, here is a prototype PCB using minimal parts:
-![example PCB](https://https://github.com/djulien/WS281X-splitter-DEV/blob/master/pcb/example-PCB.jpg | width=200)
+<img src="https://https://github.com/djulien/WS281X-splitter-DEV/blob/master/pcb/example-PCB.jpg" width="200"/>
 
 ## Usage as Splitter
 ![Splitter diagram](doc/splitter.svg)
