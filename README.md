@@ -1,5 +1,5 @@
 # WS281X-Splitter Overview
-![Connection diagram](connections.svg)
+![Connection diagram](doc/connections.svg)
 WS281X-Splitter has 2 main purposes:
 1. (Splitter) Split one long string of WS281X pixels into multiple (up to 4) shorter strings.  This can be used as an alternative to daisy-chaining multiple WS281X strips/strings and/or to avoid the need for null pixels - the distance to first pixel is considerably longer (~ 30 feet) than the distance between pixels (~ 2 feet).
 2. (Breakout) Show the next WS281X RGB data pattern (24 bits) at the current position within a group of WS281X pixels, and current FPS (8 bits).  This breakout info can be used to diagnose controller or communication problems.
@@ -10,7 +10,7 @@ The hardware is designed to be inlinable with WS281X strips.  For example, here 
 ![example PCB](pcb/example-PCB.jpg)
 
 ## Usage as Splitter
-![Splitter diagram](splitter.svg)
+![Splitter diagram](doc/splitter.svg)
 Connect WS281X-splitter as follows to use the splitter function:
 - WS281X input data stream on RA3
 - up to 4 WS281X strips/strings on RA1, RA2, RA5, and RA4
@@ -24,13 +24,13 @@ In your sequencing software, the splitter will be represented by 1 WS281X pixel 
 <sup>*</sup>Quad-length is 1/4 the number of WS281X pixels in a segment.  This allows an 8-bit value to designate a length up to 1024 pixels.
 
 ## Usage as Breakout
-![Breakout diagram](breakout.svg)
+![Breakout diagram](doc/breakout.svg)
 To use the breakout function, connect RA3 of the WS281X-Splitter to the end of a WS281X pixel strip/string (or directly to a WS281X controller port) and then connect 24 or 32 WS281X pixels to RA0.  The first 24-bit RGB WS281X pixel value received by WS281X-Splitter will be broken out as follows:
 - the first 24 WS281X pixels on RA0 will show the 24-bit RGB pixel value received (msb first)
 - if more than 24 pixels are connected to RA0, then the next 8 pixels will display the FPS (msb first)
 
 In the breakout, white pixels represent an "on" bit and red/green/blue/cyan represents an "off" bit within the first/second/third/fourth bytes.  For example, a pixel value of 0xF0CC55 received at 30 FPS would be displayed as follows:
-![Breakout example](breakout-example.png)
+![Breakout example](doc/breakout-example.png)
 
 In your sequencing software, the only change needed is to insert one WS281X pixel representing where the WS281X-Splitter is connected.
 
